@@ -487,7 +487,7 @@ async function earnFactionInvite(ns, factionName) {
             if (player.city != "Sector-12") await goToCity(ns, "Sector-12");
             gyming = await doGym(ns, false, s.stat.toUpperCase());
           } else if (uniByCity[player.city]) // Otherwise only go to free gym if our city has a gym
-            gyming = await doGym(ns, false, stat.toUpperCase());
+            gyming = await doGym(ns, false, s.stat.toUpperCase());
           else
             return ns.print(`You have insufficient money (${formatMoney(player.money)} < --pay-for-studies-threshold ` +
                 `${formatMoney(options['pay-for-studies-threshold'])}) to travel or pay for gym.`);
