@@ -473,14 +473,16 @@ async function earnFactionInvite(ns, factionName) {
             physicalStats.map(s => `${s.slice(0, 3)}: ${player.skills[s]}`).join(", "));
 
         const em = requirement * deficientStats.length / options['training-stat-per-multi-threshold'];
-        if (deficientStats.some(s => gymHeuristics[s.stat] < em)) 
+        if (deficientStats.some(s => crimeHeuristics[s.stat] < em && gymHeuristics[s.stat] < em)) 
           return ns.print(`Some mults * exp_mults * bitnode mults appear to be too low to increase stats in a reasonable amount of time. ` +
                 `You can control this with --training-stat-per-multi-threshold. Current sqrt(mult*exp_mult*bn_mult*bn_exp_mult) ` +
                 `should be ~${formatNumberShort(em, 2)}, have ` + deficientStats.map(s => s.stat).map(s => `${s.slice(0, 3)}: sqrt(` +
                     `${formatNumberShort(player.mults[s])}*${formatNumberShort(player.mults[`${s}_exp`])}*` +
                     `${formatNumberShort(bitNodeMults[`${title(s)}LevelMultiplier`])}*` +
-                    `${formatNumberShort(bitNodeMults.ClassGymExpGain)})=${formatNumberShort(gymHeuristics[s])}`).join(", "));
-        else {
+                    `${formatNumberShort(bitNodeMults.ClassGymExpGain)})=${formatNumberShort(gymHeuristics[s])}g/${formatNumberShort(crimeHeuristics[s])}c`).join(", "));
+        else if (!playerGang && bitNodeMults.CrimeExpGain >= bitNodeMults.ClassGymExpGain) {
+          doCrime = true;
+        } else {
           if (player.skills.strength < requirement)
             await gymWrapper(ns, "strength", requirement);
           if (player.skills.defense < requirement)
