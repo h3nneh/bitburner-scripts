@@ -460,6 +460,7 @@ async function earnFactionInvite(ns, factionName) {
     let deficientStats = !requirement ? [] : physicalStats.map(stat => ({ stat, value: player.skills[stat] })).filter(stat => stat.value < requirement);
     const hackHeuristic = classHeuristic(player, 'hacking');
     const crimeHeuristics = Object.fromEntries(physicalStats.map(s => [s, crimeHeuristic(player, s)]));
+    const gymHeuristics = Object.fromEntries(physicalStats.map(s => [s, classHeuristic(player, s)]));
     // Hash for special-case factions (just 'Daedalus' for now) requiring *either* hacking *or* combat
     if (reqHackingOrCombat.includes(factionName) && deficientStats.length > 0 && (
         // Compare roughly how long it will take to train up our hacking stat
@@ -470,32 +471,31 @@ async function earnFactionInvite(ns, factionName) {
     else if (deficientStats.length > 0) {
         ns.print(`${reasonPrefix} you have insufficient combat stats. Need: ${requirement} of each, Have ` +
             physicalStats.map(s => `${s.slice(0, 3)}: ${player.skills[s]}`).join(", "));
-        const em = requirement / options['training-stat-per-multi-threshold'];
-        // Hack: Create a rough heuristic suggesting how much multi we need to train physical stats in a reasonable amount of time.
-        // TODO: Be smarter (time-based decision), and also consider whether training physical stats via GYM might be faster
-        if (deficientStats.some(s => crimeHeuristics[s.stat] < em && classHeuristic(player, s.stat) < em))
-            return ns.print("Some mults * exp_mults * bitnode mults appear to be too low to increase stats in a reasonable amount of time. " +
+
+        const em = requirement * deficientStats.length / options['training-stat-per-multi-threshold'];
+        if (deficientStats.some(s => gymHeuristics[s.stat] < em)) 
+          return ns.print(`Some mults * exp_mults * bitnode mults appear to be too low to increase stats in a reasonable amount of time. ` +
                 `You can control this with --training-stat-per-multi-threshold. Current sqrt(mult*exp_mult*bn_mult*bn_exp_mult) ` +
                 `should be ~${formatNumberShort(em, 2)}, have ` + deficientStats.map(s => s.stat).map(s => `${s.slice(0, 3)}: sqrt(` +
                     `${formatNumberShort(player.mults[s])}*${formatNumberShort(player.mults[`${s}_exp`])}*` +
                     `${formatNumberShort(bitNodeMults[`${title(s)}LevelMultiplier`])}*` +
-                    `${formatNumberShort(bitNodeMults.CrimeExpGain)})=${formatNumberShort(crimeHeuristics[s])}`).join(", "));
-        
-        for (const s of deficientStats) {
-          let gyming = false;
-          if (player.money > options['pay-for-studies-threshold']) { // If we have sufficient money, pay for the best studies
-            if (player.city != "Sector-12") await goToCity(ns, "Sector-12");
-            gyming = await doGym(ns, false, s.stat.toUpperCase());
-          } else if (uniByCity[player.city]) // Otherwise only go to free gym if our city has a gym
-            gyming = await doGym(ns, false, s.stat.toUpperCase());
-          else
-            return ns.print(`You have insufficient money (${formatMoney(player.money)} < --pay-for-studies-threshold ` +
-                `${formatMoney(options['pay-for-studies-threshold'])}) to travel or pay for gym.`);
-          if (gyming)
-            workedForInvite = await monitorGym(ns, s.stat, requirement);
+                    `${formatNumberShort(bitNodeMults.ClassGymExpGain)})=${formatNumberShort(gymHeuristics[s])}`).join(", "));
+        else {
+          if (player.skills.strength < requirement)
+            await gymWrapper(ns, "strength", requirement);
+          if (player.skills.defense < requirement)
+            await gymWrapper(ns, "defense", requirement);
+          if (player.skills.dexterity < requirement)
+            await gymWrapper(ns, "dexterity", requirement);
+          if (player.skills.agility < requirement)
+            await gymWrapper(ns, "agility", requirement);
+
+          workedForInvite = 
+                player.skills.strength >= requirement
+            &&  player.skills.defense >= requirement
+            &&  player.skills.dexterity >= requirement
+            &&  player.skills.agility >= requirement;
         }
-        
-        //doCrime = true; // TODO: There could be more efficient ways to gain combat stats than homicide, although at least this serves future crime factions
     }
     if (doCrime && options['no-crime'])
         return ns.print(`${reasonPrefix} Doing crime to meet faction requirements is disabled. (--no-crime or --no-focus)`);
@@ -740,24 +740,39 @@ async function monitorStudies(ns, stat, requirement) {
 
 const gymByCity = Object.fromEntries([["Aevum", "Snap Fitness Gym"], ["Sector-12", "Powerhouse Gym"], ["Volhaven", "Millenium Fitness Gym"]]);
 
+async function gymWrapper(ns, course, requirement) {
+  const player = await getPlayerInfo(ns);
+  let gyming = false;
+  if (player.money > options['pay-for-studies-threshold']) { // If we have sufficient money, pay for the best studies
+    if (player.city != "Sector-12") await goToCity(ns, "Sector-12");
+      gyming = await doGym(ns, false, course);
+  } else if (uniByCity[player.city]) // Otherwise only go to free gym if our city has a gym
+    gyming = await doGym(ns, false, course);
+  else
+    return ns.print(`You have insufficient money (${formatMoney(player.money)} < --pay-for-studies-threshold ` +
+      `${formatMoney(options['pay-for-studies-threshold'])}) to travel or pay for gym.`);
+  if (gyming)
+    return await monitorGym(ns, course, requirement);
+}
+
 async function doGym(ns, focus, course, gym = null) {
     if (options['no-studying']) {
-        log(ns, `WARNING: Could not study '${course}' because --no-studying is set.`, false, 'warning');
+        log(ns, `WARNING: Could not gym '${course}' because --no-studying is set.`, false, 'warning');
         return;
     }
     const playerCity = (await getPlayerInfo(ns)).city;
     if (!gym) { // Auto-detect the gym in our city
         gym = gymByCity[playerCity];
         if (!gym) {
-            log(ns, `WARNING: Could not study '${course}' because we are in city '${playerCity}' without a gym.`, false, 'warning');
+            log(ns, `WARNING: Could not gym '${course}' because we are in city '${playerCity}' without a gym.`, false, 'warning');
             return;
         }
     }
     if (await getNsDataThroughFile(ns, `ns.singularity.gymWorkout(ns.args[0], ns.args[1], ns.args[2])`, null, [gym, course, focus])) {
-        log(ns, `Started studying '${course}' at '${gym}'`, false, 'success');
+        log(ns, `Started gyming '${course}' at '${gym}'`, false, 'success');
         return true;
     }
-    log(ns, `ERROR: For some reason, failed to study '${course}' at gym '${gym}' (Not in correct city? Player is in '${playerCity}')`, false, 'error');
+    log(ns, `ERROR: For some reason, failed to gym '${course}' at gym '${gym}' (Not in correct city? Player is in '${playerCity}')`, false, 'error');
     return false;
 }
 
