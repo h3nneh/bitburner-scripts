@@ -487,7 +487,7 @@ async function earnFactionInvite(ns, factionName) {
                     `${formatNumberShort(bitNodeMults[`${title(s)}LevelMultiplier`])}*` +
                     `${formatNumberShort(bitNodeMults.ClassGymExpGain)})=${formatNumberShort(gymHeuristics[s])}g/${formatNumberShort(crimeHeuristics[s])}c`).join(", "));
         else if (!playerGang && bitNodeMults.CrimeExpGain >= bitNodeMults.ClassGymExpGain 
-          && deficientStats.some(s => exp_requirements[s.stat] / Math.pow(crimeHeuristics[s.stat], 2) < 5 * 60)) {
+          && deficientStats.some(s => exp_requirements[s.stat] / crimeHeuristics[s.stat] < 60)) {
           doCrime = true;
         } else {
           if (player.skills.strength < requirement)
