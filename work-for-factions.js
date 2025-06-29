@@ -474,7 +474,7 @@ async function earnFactionInvite(ns, factionName) {
 
         const em = requirement / options['training-stat-per-multi-threshold'];
         let exp_requirements = Object.fromEntries(physicalStats.map(s => [s, requirement * requirement]));
-        let hasFormulas = await doesFileExist(ns, "Formulas.exe");
+        let hasFormulas = ns.fileExists("Formulas.exe", "home");
         if (hasFormulas) {
           try { exp_requirements = Object.fromEntries(physicalStats.map(s => [s, ns.formulas.skills.calculateExp(requirement) - ns.formulas.skills.calculateExp(player.skills[s])]));}
           catch {}
@@ -739,18 +739,18 @@ async function monitorStudies(ns, stat, requirement) {
             return true;
         }
         let eta_milliseconds = 0;
-        let hasFormulas = await doesFileExist(ns, "Formulas.exe");
+        let hasFormulas = ns.fileExists("Formulas.exe", "home");
         if (hasFormulas) {
           try {
             switch (stat) {
               case "hacking" : eta_milliseconds = 
                 1000 * (ns.formulas.skills.calculateExp(requirement) - ns.formulas.skills.calculateExp(player.skills[stat])) 
-                / ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).hackExp;
+                / (ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).hackExp * 200);
                 break;
               
               case "charisma" : eta_milliseconds = 
                 1000 * (ns.formulas.skills.calculateExp(requirement) - ns.formulas.skills.calculateExp(player.skills[stat])) 
-                / ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).chaExp;
+                / (ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).chaExp * 200);
                 break;
             }
           } catch { }
@@ -820,28 +820,28 @@ async function monitorGym(ns, stat, requirement) {
             return true;
         }
         let eta_milliseconds = 0;
-        let hasFormulas = await doesFileExist(ns, "Formulas.exe");
+        let hasFormulas = ns.fileExists("Formulas.exe", "home");;
         if (hasFormulas) {
           try {
             switch (stat) {
               case "strength" : eta_milliseconds = 
                 1000 * (ns.formulas.skills.calculateExp(requirement) - ns.formulas.skills.calculateExp(player.skills[stat])) 
-                / ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).strExp;
+                / (ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).strExp * 200);
                 break;
               
               case "defense" : eta_milliseconds = 
                 1000 * (ns.formulas.skills.calculateExp(requirement) - ns.formulas.skills.calculateExp(player.skills[stat])) 
-                / ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).defExp;
+                / (ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).defExp * 200);
                 break;
 
               case "dexterity" : eta_milliseconds = 
                 1000 * (ns.formulas.skills.calculateExp(requirement) - ns.formulas.skills.calculateExp(player.skills[stat])) 
-                / ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).dexExp;
+                / (ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).dexExp * 200);
                 break;
 
               case "agility" : eta_milliseconds = 
                 1000 * (ns.formulas.skills.calculateExp(requirement) - ns.formulas.skills.calculateExp(player.skills[stat])) 
-                / ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).agiExp;
+                / (ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).agiExp * 200);
                 break;
             }
               
@@ -1433,30 +1433,4 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
     ns.print(`Stopped working for "${companyName}" repRequiredForFaction: ${repRequiredForFaction.toLocaleString('en')} ` +
         `currentReputation: ${Math.round(currentReputation).toLocaleString('en')} inFaction: ${player.factions.includes(factionName)}`);
     return false;
-}
-
-/** Helper to check if a file exists.
- * A helper is used so that we have the option of exploring alternative implementations that cost less/no RAM.
- * @param {NS} ns
- * @returns {Promise<boolean>} */
-async function doesFileExist(ns, fileName, hostname = undefined) {
-    // Fast (and free) - for local files, try to read the file and ensure it's not empty
-    hostname ??= daemonHost;
-    if (hostname === daemonHost && !fileName.endsWith('.exe'))
-        return ns.read(fileName) != '';
-    // return ns.fileExists(fileName, hostname);
-    // TODO: If the approach below causes too much latency, we may wish to cease ram dodging and revert to the simple method above.
-    const targetServer = getServerByName(hostname); // Each server object should have a cache of files on that server.
-    if (!targetServer) // If the servers are not yet set up, use the fallback approach (filesExist)
-        return await filesExist(ns, [fileName], hostname);
-    return await targetServer.hasFile(fileName);
-}
-
-/** Helper to check which of a set of files exist on a remote server in a single batch ram-dodging request
- * @param {NS} ns
- * @param {string[]} fileNames
- * @returns {Promise<boolean[]>} */
-async function filesExist(ns, fileNames, hostname = undefined) {
-    return await getNsDataThroughFile(ns, `ns.args.slice(1).map(f => ns.fileExists(f, ns.args[0]))`,
-        '/Temp/files-exist.txt', [hostname ?? daemonHost, ...fileNames])
 }
