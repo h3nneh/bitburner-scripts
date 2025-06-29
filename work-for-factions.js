@@ -472,7 +472,13 @@ async function earnFactionInvite(ns, factionName) {
         ns.print(`${reasonPrefix} you have insufficient combat stats. Need: ${requirement} of each, Have ` +
             physicalStats.map(s => `${s.slice(0, 3)}: ${player.skills[s]}`).join(", "));
 
-        const em = requirement * deficientStats.length / options['training-stat-per-multi-threshold'];
+        const em = requirement / options['training-stat-per-multi-threshold'];
+        let exp_requirements = Object.fromEntries(physicalStats.map(s => [s, requirement * requirement]));
+        let hasFormulas = await doesFileExist(ns, "Formulas.exe");
+        if (hasFormulas) {
+          try { exp_requirements = Object.fromEntries(physicalStats.map(s => [s, ns.formulas.skills.calculateExp(requirement) - ns.formulas.skills.calculateExp(player.skills[s])]));}
+          catch {}
+        }
         if (deficientStats.some(s => crimeHeuristics[s.stat] < em && gymHeuristics[s.stat] < em)) 
           return ns.print(`Some mults * exp_mults * bitnode mults appear to be too low to increase stats in a reasonable amount of time. ` +
                 `You can control this with --training-stat-per-multi-threshold. Current sqrt(mult*exp_mult*bn_mult*bn_exp_mult) ` +
@@ -480,7 +486,8 @@ async function earnFactionInvite(ns, factionName) {
                     `${formatNumberShort(player.mults[s])}*${formatNumberShort(player.mults[`${s}_exp`])}*` +
                     `${formatNumberShort(bitNodeMults[`${title(s)}LevelMultiplier`])}*` +
                     `${formatNumberShort(bitNodeMults.ClassGymExpGain)})=${formatNumberShort(gymHeuristics[s])}g/${formatNumberShort(crimeHeuristics[s])}c`).join(", "));
-        else if (!playerGang && bitNodeMults.CrimeExpGain >= bitNodeMults.ClassGymExpGain) {
+        else if (!playerGang && bitNodeMults.CrimeExpGain >= bitNodeMults.ClassGymExpGain 
+          && deficientStats.some(s => exp_requirements[s.stat] / Math.pow(crimeHeuristics[s.stat], 2) < 5 * 60)) {
           doCrime = true;
         } else {
           if (player.skills.strength < requirement)
@@ -731,10 +738,27 @@ async function monitorStudies(ns, stat, requirement) {
             log(ns, `SUCCESS: Achieved ${stat} level ${player.skills[stat]} >= ${requirement} while studying`, false, 'info');
             return true;
         }
+        let eta_milliseconds = 0;
+        let hasFormulas = await doesFileExist(ns, "Formulas.exe");
+        if (hasFormulas) {
+          try {
+            switch (stat) {
+              case "hacking" : eta_milliseconds = 
+                1000 * (ns.formulas.skills.calculateExp(requirement) - ns.formulas.skills.calculateExp(player.skills[stat])) 
+                / ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).hackExp;
+                break;
+              
+              case "charisma" : eta_milliseconds = 
+                1000 * (ns.formulas.skills.calculateExp(requirement) - ns.formulas.skills.calculateExp(player.skills[stat])) 
+                / ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).chaExp;
+                break;
+            }
+          } catch { }
+        }
         if ((Date.now() - lastStatusUpdateTime) > statusUpdateInterval) {
             lastStatusUpdateTime = Date.now();
             log(ns, `Studying "${currentWork.classType}" at ${currentWork.location} until ${stat} reaches ${requirement}. ` +
-                `Currently at ${player.skills[stat]}...`, false, 'info'); // TODO: Compute an ETA, and configure training threshold based on ETA
+                `Currently at ${player.skills[stat]}...` + `${eta_milliseconds == 0 ? "" : ` (ETA: ${formatDuration(eta_milliseconds)})`}`, false, 'info');
         }
         await ns.sleep(loopSleepInterval);
     }
@@ -795,10 +819,39 @@ async function monitorGym(ns, stat, requirement) {
             log(ns, `SUCCESS: Achieved ${stat} level ${player.skills[stat]} >= ${requirement} while gyming`, false, 'info');
             return true;
         }
+        let eta_milliseconds = 0;
+        let hasFormulas = await doesFileExist(ns, "Formulas.exe");
+        if (hasFormulas) {
+          try {
+            switch (stat) {
+              case "strength" : eta_milliseconds = 
+                1000 * (ns.formulas.skills.calculateExp(requirement) - ns.formulas.skills.calculateExp(player.skills[stat])) 
+                / ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).strExp;
+                break;
+              
+              case "defense" : eta_milliseconds = 
+                1000 * (ns.formulas.skills.calculateExp(requirement) - ns.formulas.skills.calculateExp(player.skills[stat])) 
+                / ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).defExp;
+                break;
+
+              case "dexterity" : eta_milliseconds = 
+                1000 * (ns.formulas.skills.calculateExp(requirement) - ns.formulas.skills.calculateExp(player.skills[stat])) 
+                / ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).dexExp;
+                break;
+
+              case "agility" : eta_milliseconds = 
+                1000 * (ns.formulas.skills.calculateExp(requirement) - ns.formulas.skills.calculateExp(player.skills[stat])) 
+                / ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).agiExp;
+                break;
+            }
+              
+          } catch { }
+        }
+        
         if ((Date.now() - lastStatusUpdateTime) > statusUpdateInterval) {
             lastStatusUpdateTime = Date.now();
             log(ns, `Gyming "${currentWork.classType}" at ${currentWork.location} until ${stat} reaches ${requirement}. ` +
-                `Currently at ${player.skills[stat]}...`, false, 'info'); // TODO: Compute an ETA, and configure training threshold based on ETA
+                `Currently at ${player.skills[stat]}...` + `${eta_milliseconds == 0 ? "" : ` (ETA: ${formatDuration(eta_milliseconds)})`}`, false, 'info');
         }
         await ns.sleep(loopSleepInterval);
     }
@@ -1380,4 +1433,30 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
     ns.print(`Stopped working for "${companyName}" repRequiredForFaction: ${repRequiredForFaction.toLocaleString('en')} ` +
         `currentReputation: ${Math.round(currentReputation).toLocaleString('en')} inFaction: ${player.factions.includes(factionName)}`);
     return false;
+}
+
+/** Helper to check if a file exists.
+ * A helper is used so that we have the option of exploring alternative implementations that cost less/no RAM.
+ * @param {NS} ns
+ * @returns {Promise<boolean>} */
+async function doesFileExist(ns, fileName, hostname = undefined) {
+    // Fast (and free) - for local files, try to read the file and ensure it's not empty
+    hostname ??= daemonHost;
+    if (hostname === daemonHost && !fileName.endsWith('.exe'))
+        return ns.read(fileName) != '';
+    // return ns.fileExists(fileName, hostname);
+    // TODO: If the approach below causes too much latency, we may wish to cease ram dodging and revert to the simple method above.
+    const targetServer = getServerByName(hostname); // Each server object should have a cache of files on that server.
+    if (!targetServer) // If the servers are not yet set up, use the fallback approach (filesExist)
+        return await filesExist(ns, [fileName], hostname);
+    return await targetServer.hasFile(fileName);
+}
+
+/** Helper to check which of a set of files exist on a remote server in a single batch ram-dodging request
+ * @param {NS} ns
+ * @param {string[]} fileNames
+ * @returns {Promise<boolean[]>} */
+async function filesExist(ns, fileNames, hostname = undefined) {
+    return await getNsDataThroughFile(ns, `ns.args.slice(1).map(f => ns.fileExists(f, ns.args[0]))`,
+        '/Temp/files-exist.txt', [hostname ?? daemonHost, ...fileNames])
 }
