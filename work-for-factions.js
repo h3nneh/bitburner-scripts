@@ -476,7 +476,9 @@ async function earnFactionInvite(ns, factionName) {
         let exp_requirements = Object.fromEntries(physicalStats.map(s => [s, requirement * requirement]));
         let hasFormulas = ns.fileExists("Formulas.exe", "home");
         if (hasFormulas) {
-          try { exp_requirements = Object.fromEntries(physicalStats.map(s => [s, ns.formulas.skills.calculateExp(requirement) - ns.formulas.skills.calculateExp(player.skills[s])]));}
+          try {
+            exp_requirements = Object.fromEntries(physicalStats.map(s => [s, ns.formulas.skills.calculateExp(requirement, player.mults[s]) - ns.formulas.skills.calculateExp(player.skills[s], player.mults[s])]));
+          }
           catch {}
         }
         if (deficientStats.some(s => crimeHeuristics[s.stat] < em && gymHeuristics[s.stat] < em)) 
@@ -500,12 +502,14 @@ async function earnFactionInvite(ns, factionName) {
             await gymWrapper(ns, "agility", requirement);
 
           workedForInvite = 
-                player.skills.strength >= requirement
-            &&  player.skills.defense >= requirement
-            &&  player.skills.dexterity >= requirement
-            &&  player.skills.agility >= requirement;
+              player.skills.strength >= requirement
+          &&  player.skills.defense >= requirement
+          &&  player.skills.dexterity >= requirement
+          &&  player.skills.agility >= requirement;
         }
     }
+    if (breakToMainLoop()) return false;
+    
     if (doCrime && options['no-crime'])
         return ns.print(`${reasonPrefix} Doing crime to meet faction requirements is disabled. (--no-crime or --no-focus)`);
     if (doCrime)
@@ -743,14 +747,14 @@ async function monitorStudies(ns, stat, requirement) {
         if (hasFormulas) {
           try {
             switch (stat) {
-              case "hacking" : eta_milliseconds = 
-                1000 * (ns.formulas.skills.calculateExp(requirement) - ns.formulas.skills.calculateExp(player.skills[stat])) 
-                / (ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).hackExp * 200);
+              case "hack" : eta_milliseconds = 
+                1000 * (ns.formulas.skills.calculateExp(requirement, player.mults.hacking) - ns.formulas.skills.calculateExp(player.skills[stat], player.mults.hacking)) 
+                / (ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).hackExp * 5);
                 break;
               
-              case "charisma" : eta_milliseconds = 
-                1000 * (ns.formulas.skills.calculateExp(requirement) - ns.formulas.skills.calculateExp(player.skills[stat])) 
-                / (ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).chaExp * 200);
+              case "cha" : eta_milliseconds = 
+                1000 * (ns.formulas.skills.calculateExp(requirement, player.mults.charisma) - ns.formulas.skills.calculateExp(player.skills[stat], player.mults.charisma)) 
+                / (ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).chaExp * 5);
                 break;
             }
           } catch { }
@@ -825,23 +829,23 @@ async function monitorGym(ns, stat, requirement) {
           try {
             switch (stat) {
               case "strength" : eta_milliseconds = 
-                1000 * (ns.formulas.skills.calculateExp(requirement) - ns.formulas.skills.calculateExp(player.skills[stat])) 
-                / (ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).strExp * 200);
+                1000 * (ns.formulas.skills.calculateExp(requirement, player.mults.strength) - ns.formulas.skills.calculateExp(player.skills[stat], player.mults.strength)) 
+                / (ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).strExp * 5);
                 break;
               
               case "defense" : eta_milliseconds = 
-                1000 * (ns.formulas.skills.calculateExp(requirement) - ns.formulas.skills.calculateExp(player.skills[stat])) 
-                / (ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).defExp * 200);
+                1000 * (ns.formulas.skills.calculateExp(requirement, player.mults.defense) - ns.formulas.skills.calculateExp(player.skills[stat], player.mults.defense)) 
+                / (ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).defExp * 5);
                 break;
 
               case "dexterity" : eta_milliseconds = 
-                1000 * (ns.formulas.skills.calculateExp(requirement) - ns.formulas.skills.calculateExp(player.skills[stat])) 
-                / (ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).dexExp * 200);
+                1000 * (ns.formulas.skills.calculateExp(requirement, player.mults.dexterity) - ns.formulas.skills.calculateExp(player.skills[stat], player.mults.dexterity)) 
+                / (ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).dexExp * 5);
                 break;
 
               case "agility" : eta_milliseconds = 
-                1000 * (ns.formulas.skills.calculateExp(requirement) - ns.formulas.skills.calculateExp(player.skills[stat])) 
-                / (ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).agiExp * 200);
+                1000 * (ns.formulas.skills.calculateExp(requirement, player.mults.agility) - ns.formulas.skills.calculateExp(player.skills[stat], player.mults.agility)) 
+                / (ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).agiExp * 5);
                 break;
             }
               
@@ -1337,19 +1341,30 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
             // Check whether we can train stats in a "reasonable amount of time"
             const em = requiredCha / options['training-stat-per-multi-threshold'];
             const chaHeuristic = classHeuristic(player, 'charisma');
-            if (chaHeuristic < em) {
+            let eta_milliseconds = -1;
+            let hasFormulas = ns.fileExists("Formulas.exe", "home");
+            if (hasFormulas) {
+              try { 
+                eta_milliseconds = 
+                  1000 * (ns.formulas.skills.calculateExp(requiredCha, player.mults.charisma) - ns.formulas.skills.calculateExp(player.skills.charisma, player.mults.charisma)) 
+                  / (ns.formulas.work.universityGains(player, "Leadership", "ZB Institute of Technology").chaExp * 5);
+              }
+              catch {}
+            }
+            if (chaHeuristic < em && (eta_milliseconds == -1 || eta_milliseconds > 5 * 60 * 1000)) {
                 if (!decidedNotToStudy) // Only generate the log below once
                     log(ns, `INFO: You are only lacking in Charisma to get our next promotion. Need: ${requiredCha}, Have: ${player.skills.charisma}` +
                         `\nUnfortunately, your combination of Charisma mult (${formatNumberShort(player.mults.charisma)}), ` +
                         `exp_mult (${formatNumberShort(player.mults.charisma_exp)}), and bitnode charisma / study exp mults ` +
                         `(${formatNumberShort(bitNodeMults.CharismaLevelMultiplier)}) / (${formatNumberShort(bitNodeMults.ClassGymExpGain)}) ` +
                         `are probably too low to increase charisma from ${player.skills.charisma} to ${requiredCha} in a reasonable amount of time ` +
-                        `(${formatNumberShort(chaHeuristic)} < ${formatNumberShort(em, 2)} - configure with --training-stat-per-multi-threshold)`);
+                        `(${formatNumberShort(chaHeuristic)} < ${formatNumberShort(em, 2)}` +
+                        `${eta_milliseconds == -1 ? "" : ` - ${formatDuration(eta_milliseconds)}`}) - configure with --training-stat-per-multi-threshold)`);
                 decidedNotToStudy = true;
             } else // On any loop, we can change our mind and decide studying is worthwhile
                 decidedNotToStudy = false;
             if (!decidedNotToStudy) {
-                status = `Studying at ZB university until Cha reaches ${requiredCha}...\n` + status;
+                status = `Studying at ZB university until Cha reaches ${requiredCha}... (ETA: ${formatDuration(eta_milliseconds)})\n` + status;
                 // TODO: See if we can re-use the function "monitorStudies" here instead of duplicating a lot of the same code.
                 let classType = currentWork.classType;
                 if (isStudying && !(classType && classType.toLowerCase().includes('leadership'))) {
