@@ -222,7 +222,7 @@ async function loadStartupData(ns) {
         dictFactionAugs[f].filter(aug => !ownedAugmentations.includes(aug) && (
             options['desired-augs'].includes(aug) ||
             Object.keys(dictAugStats[aug]).length == 0 || options['desired-stats'].length == 0 ||
-            Object.keys(dictAugStats[aug]).some(key => options['desired-stats'].some(stat => key.includes(stat)))
+            Object.keys(dictAugStats[aug]).some(key => options['desired-stats'].some(stat => key.includes(stat) && dictAugStats[aug][key] > 1))
         )).reduce((max, aug) => Math.max(max, dictAugRepReqs[aug]), -1)]));
     //ns.print("Most expensive desired aug by faction: " + JSON.stringify(mostExpensiveDesiredAugByFaction));
 
@@ -487,7 +487,7 @@ async function earnFactionInvite(ns, factionName) {
                     `${formatNumberShort(bitNodeMults[`${title(s)}LevelMultiplier`])}*` +
                     `${formatNumberShort(bitNodeMults.ClassGymExpGain)})=${formatNumberShort(gymHeuristics[s])}g/${formatNumberShort(crimeHeuristics[s])}c`).join(", "));
         else if (!playerGang && bitNodeMults.CrimeExpGain >= bitNodeMults.ClassGymExpGain 
-          && deficientStats.some(s => exp_requirements[s.stat] / crimeHeuristics[s.stat] < 60)) {
+          && deficientStats.some(s => exp_requirements[s.stat] / crimeHeuristics[s.stat] < 5 * 60)) {
           doCrime = true;
         } else {
           if (player.skills.strength < requirement)
