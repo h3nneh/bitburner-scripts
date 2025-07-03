@@ -488,10 +488,10 @@ async function earnFactionInvite(ns, factionName) {
                     `${formatNumberShort(player.mults[s])}*${formatNumberShort(player.mults[`${s}_exp`])}*` +
                     `${formatNumberShort(bitNodeMults[`${title(s)}LevelMultiplier`])}*` +
                     `${formatNumberShort(bitNodeMults.ClassGymExpGain)})=${formatNumberShort(gymHeuristics[s])}g/${formatNumberShort(crimeHeuristics[s])}c`).join(", "));
-        else if (deficientStats.some(s => exp_requirements[s.stat] / (ns.formulas.work.gymGains(player, s.stat.substring(0, 3), "Powerhouse Gym")[`${s.stat.substring(0, 3)}Exp`] * 5) > 15 * 60))
-          return ns.print(`Gym takes too long. (> 15 min per stat)`);
+        else if (deficientStats.reduce((sum, s) => sum + (exp_requirements[s.stat] / (ns.formulas.work.gymGains(player, s.stat.substring(0, 3), "Powerhouse Gym")[`${s.stat.substring(0, 3)}Exp`] * 5)), 0) > 30 * 60)
+          return ns.print(`Gym takes too long. (> 30 min for all stats)`);
         else if (!playerGang && bitNodeMults.CrimeExpGain >= bitNodeMults.ClassGymExpGain 
-          && deficientStats.some(s => exp_requirements[s.stat] / (crimeHeuristics[s.stat] * 3 / 4) < 5 * 60)) {
+          && deficientStats.some(s => exp_requirements[s.stat] / (crimeHeuristics[s.stat] * 3 / 4) < 15 * 60)) {
           doCrime = true;
         } else {
           while (!breakToMainLoop() && !workedForInvite) {
