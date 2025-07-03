@@ -275,7 +275,7 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
         // TODO: We should be able to borrow logic from work-for-factions.js to have more sleeves work for useful factions / companies
         // We'll cycle through work types until we find one that is supported. TODO: Auto-determine the most productive faction work to do.
         const faction = playerWorkInfo.factionName;
-        const work = await bestFactionWork(ns, sleeve);
+        const work = await bestFactionWork(ns, sleeve, i, faction);
         return [`work for faction '${faction}' (${work})`, `ns.sleeve.setToFactionWork(ns.args[0], ns.args[1], ns.args[2])`, [i, faction, work],
         /*   */ `helping earn rep with faction ${faction} by doing ${work} work.`];
     } // Same as above if player is currently working for a megacorp
@@ -418,7 +418,12 @@ async function calculateCrimeChance(ns, sleeve, crimeName) {
     return Math.min(chance, 1);
 }
 
-async function bestFactionWork(ns, sleeve) {
+/** @param {NS} ns
+ * @param {SleevePerson} sleeve
+ * @param {number} i
+ * @param {string} faction
+ * Best faction work */
+async function bestFactionWork(ns, sleeve, i, faction) {
   let hackGain = ns.formulas.work.factionGains(sleeve, "hacking", 0).reputation;
   let fieldGain = ns.formulas.work.factionGains(sleeve, "field", 0).reputation;
   let secGain = ns.formulas.work.factionGains(sleeve, "security", 0).reputation;
@@ -439,7 +444,7 @@ async function bestFactionWork(ns, sleeve) {
 
   for (const work of order) {
     try { // Assigning a task can throw an error rather than simply returning false. We must suppress this
-      if (!await getNsDataThroughFile(ns, command, `/Temp/sleeve-${work}.txt`, args)) {
+      if (!await getNsDataThroughFile(ns, `ns.sleeve.setToFactionWork(ns.args[0], ns.args[1], ns.args[2])`, `/Temp/sleeve-setToFactionWork.txt`, [i, faction, work])) {
         continue; // This type of faction work must not be supported
       }
     } catch { }
