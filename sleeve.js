@@ -275,7 +275,7 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
         // TODO: We should be able to borrow logic from work-for-factions.js to have more sleeves work for useful factions / companies
         // We'll cycle through work types until we find one that is supported. TODO: Auto-determine the most productive faction work to do.
         const faction = playerWorkInfo.factionName;
-        const work = works[workByFaction[faction] || 0];
+        const work = await bestFactionWork(ns, sleeve);
         return [`work for faction '${faction}' (${work})`, `ns.sleeve.setToFactionWork(ns.args[0], ns.args[1], ns.args[2])`, [i, faction, work],
         /*   */ `helping earn rep with faction ${faction} by doing ${work} work.`];
     } // Same as above if player is currently working for a megacorp
@@ -374,19 +374,8 @@ async function setSleeveTask(ns, i, designatedTask, command, args) {
             return true;
         }
     } catch { }
-    // If assigning the task failed...
-    lastRerollTime[i] = 0;
     // If working for a faction, it's possible he current work isn't supported, so try the next one.
-    if (designatedTask.startsWith('work for faction')) {
-        const faction = args[1]; // Hack: Not obvious, but the second argument will be the faction name in this case.
-        let nextWorkIndex = (workByFaction[faction] || 0) + 1;
-        if (nextWorkIndex >= works.length) {
-            log(ns, `WARN: Failed to ${strAction}. None of the ${works.length} work types appear to be supported. Will loop back and try again.`, true, 'warning');
-            nextWorkIndex = 0;
-        } else
-            log(ns, `INFO: Failed to ${strAction} - work type may not be supported. Trying the next work type (${works[nextWorkIndex]})`);
-        workByFaction[faction] = nextWorkIndex;
-    } else if (designatedTask.startsWith('Bladeburner')) { // Bladeburner action may be out of operations
+    if (designatedTask.startsWith('Bladeburner')) { // Bladeburner action may be out of operations
         bladeburnerCooldown[i] = Date.now(); // There will be a cooldown before this task is assigned again.
     } else
         log(ns, `ERROR: Failed to ${strAction}`, true, 'error');
@@ -427,4 +416,33 @@ async function calculateCrimeChance(ns, sleeve, crimeName) {
     chance /= 975;
     chance /= crimeStats.difficulty;
     return Math.min(chance, 1);
+}
+
+async function bestFactionWork(ns, sleeve) {
+  let hackGain = ns.formulas.work.factionGains(sleeve, "hacking", 0).reputation;
+  let fieldGain = ns.formulas.work.factionGains(sleeve, "field", 0).reputation;
+  let secGain = ns.formulas.work.factionGains(sleeve, "security", 0).reputation;
+  let order = []
+
+  if (hackGain > fieldGain && hackGain > secGain) {
+    if (fieldGain > secGain) order = ["hacking", "field", "security"];
+    else order = ["hacking", "security", "field"];
+  }
+  else if (fieldGain > hackGain && fieldGain > secGain) {
+    if (hackGain > secGain) order = ["field", "hacking", "security"];
+    else order = ["field", "security", "hacking"];
+  }
+  else {
+    if (fieldGain > hackGain) order = ["security", "field", "hacking"];
+    else order = ["security", "hacking", "field"];
+  }
+
+  for (const work of order) {
+    try { // Assigning a task can throw an error rather than simply returning false. We must suppress this
+      if (!await getNsDataThroughFile(ns, command, `/Temp/sleeve-${work}.txt`, args)) {
+        continue; // This type of faction work must not be supported
+      }
+    } catch { }
+    return work;
+  }
 }
