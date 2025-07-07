@@ -137,7 +137,8 @@ export async function main(ns) {
     // Default desired-stats if none were specified
     if (options['desired-stats'].length == 0)
         options['desired-stats'] = options['crime-focus'] ? ['str', 'def', 'dex', 'agi', 'faction_rep', 'hacknet', 'crime'] :
-            ['hacking', 'faction_rep', 'company_rep', 'charisma', 'hacknet', 'crime_money']
+            await getResetInfoRd(ns).currentBitnode == 8 ? ['hacking', 'hacking_exp'] :
+            ['hacking', 'faction_rep', 'company_rep', 'charisma', 'hacknet']
     // Default desired-augs if none were specified
     if (options['desired-augs'].length == 0)
         options['desired-augs'] = default_desired_augs;
@@ -416,8 +417,8 @@ const title = s => s && s[0].toUpperCase() + s.slice(1); // Annoyingly bitnode m
 /** Return the product of all multipliers affecting training the specified stat.
  * @param {Player} player @param {string} stat @param {number} trainingBitnodeMult */
 function heuristic(player, stat, trainingBitnodeMult) {
-    return Math.sqrt(player.mults[stat] * bitNodeMults[`${title(stat)}LevelMultiplier`] *
-        /* */ player.mults[`${stat}_exp`] * trainingBitnodeMult);
+    return player.mults[stat] * bitNodeMults[`${title(stat)}LevelMultiplier`] *
+        /* */ (1 + Math.log(1 + player.mults[`${stat}_exp`])) * (1 + Math.log(1 + trainingBitnodeMult));
 }
 /** A heuristic for how long it'll take to train the specified stat via Crime. @param {Player} player @param {string} stat @param */
 const crimeHeuristic = (player, stat) => heuristic(player, stat, bitNodeMults.CrimeExpGain); // When training with crime
@@ -490,8 +491,9 @@ async function earnFactionInvite(ns, factionName) {
                     `${formatNumberShort(bitNodeMults.ClassGymExpGain)})=${formatNumberShort(gymHeuristics[s])}g/${formatNumberShort(crimeHeuristics[s])}c`).join(", "));
         else if (deficientStats.reduce((sum, s) => sum + (exp_requirements[s.stat] / (ns.formulas.work.gymGains(player, s.stat.substring(0, 3), "Powerhouse Gym")[`${s.stat.substring(0, 3)}Exp`] * 5)), 0) > 30 * 60)
           return ns.print(`Gym takes too long. (> 30 min for all stats)`);
-        else if (!playerGang && bitNodeMults.CrimeExpGain >= bitNodeMults.ClassGymExpGain 
-          && deficientStats.some(s => exp_requirements[s.stat] / (crimeHeuristics[s.stat] * 3 / 4) < 15 * 60)) {
+        else if (!playerGang && bitNodeMults.CrimeExpGain >= bitNodeMults.ClassGymExpGain &&
+          deficientStats.every(s => exp_requirements[s.stat] / (crimeHeuristics[s.stat] * 3 / 4) < 5 * 60) &&
+          deficientStats.length > 2) {
           doCrime = true;
         } else {
           while (!breakToMainLoop() && !workedForInvite) {
@@ -1364,16 +1366,20 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
               }
               catch {}
             }
-            if (chaHeuristic < em && (eta_milliseconds == -1 || eta_milliseconds > 5 * 60 * 1000)) {
+            if (chaHeuristic < em) {
                 if (!decidedNotToStudy) // Only generate the log below once
                     log(ns, `INFO: You are only lacking in Charisma to get our next promotion. Need: ${requiredCha}, Have: ${player.skills.charisma}` +
                         `\nUnfortunately, your combination of Charisma mult (${formatNumberShort(player.mults.charisma)}), ` +
                         `exp_mult (${formatNumberShort(player.mults.charisma_exp)}), and bitnode charisma / study exp mults ` +
                         `(${formatNumberShort(bitNodeMults.CharismaLevelMultiplier)}) / (${formatNumberShort(bitNodeMults.ClassGymExpGain)}) ` +
                         `are probably too low to increase charisma from ${player.skills.charisma} to ${requiredCha} in a reasonable amount of time ` +
-                        `(${formatNumberShort(chaHeuristic)} < ${formatNumberShort(em, 2)}` +
-                        `${eta_milliseconds == -1 ? "" : ` - ${formatDuration(eta_milliseconds)}`}) - configure with --training-stat-per-multi-threshold)`);
+                        `(${formatNumberShort(chaHeuristic)} < ${formatNumberShort(em, 2)} - configure with --training-stat-per-multi-threshold)`);
                 decidedNotToStudy = true;
+            }
+            else if (eta_milliseconds > 5 * 60 * 1000) {
+              if (!decidedNotToStudy) // Only generate the log below once
+                log(ns, `Studying charisma takes too long (${formatDuration(eta_milliseconds)}).`);
+              decidedNotToStudy = true;
             } else // On any loop, we can change our mind and decide studying is worthwhile
                 decidedNotToStudy = false;
             if (!decidedNotToStudy) {
