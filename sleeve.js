@@ -237,7 +237,7 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
     // Train if our sleeve's physical stats aren't where we want them
     if (canTrain || playerWorkInfo.type == "CLASS") {
         const univClasses = {
-            "hacking": ns.enums.UniversityClassType.algorithms,
+            "hacking": (playerInfo.money < 5e6) ? ns.enums.UniversityClassType.computerScience : ns.enums.UniversityClassType.algorithms,
             "charisma": ns.enums.UniversityClassType.leadership
         };
         let untrainedStats = trainStats.filter(stat => sleeve.skills[stat] < options[`train-to-${stat}`] || playerWorkInfo.classType == stat);
@@ -279,7 +279,8 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
         }
     }
     // If player is currently working for faction or company rep, a sleeve can help him out (Note: Only one sleeve can work for a faction)
-    if (i == followPlayerSleeve && playerWorkInfo.type == "FACTION") {
+    if (i == followPlayerSleeve && playerWorkInfo.type == "FACTION" &&
+        ns.formulas.work.factionGains(sleeve, ns.enums.FactionWorkType.security, 0).reputation / ns.formulas.work.factionGains(playerInfo, ns.enums.FactionWorkType.hacking, 0).reputation >= 0.1) {
         // TODO: We should be able to borrow logic from work-for-factions.js to have more sleeves work for useful factions / companies
         // We'll cycle through work types until we find one that is supported. TODO: Auto-determine the most productive faction work to do.
         const faction = playerWorkInfo.factionName;
@@ -293,18 +294,15 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
           ];
         }
     } // Same as above if player is currently working for a megacorp
-    if (i == followPlayerSleeve && playerWorkInfo.type == "COMPANY") {
+    if (i == followPlayerSleeve && playerWorkInfo.type == "COMPANY" &&
+        ) {
         const companyName = playerWorkInfo.companyName;
-        const player = await getPlayerInfo(ns);
-        const companyWork = player.jobs[companyName];
-        if (ns.formulas.work.companyGains(sleeve, companyName, companyWork, 0).reputation / ns.formulas.work.companyGains(player, companyName, companyWork, 0).reputation >= 0.05) {
-          return [
+        return [
             `work for company '${companyName}'`,
             `ns.sleeve.setToCompanyWork(ns.args[0], ns.args[1])`,
             [i, companyName],
             `helping earn rep with company ${companyName}.`
-          ];
-        }
+        ];
     }
     // If gangs are available, prioritize homicide until we've got the requisite -54K karma to unlock them
     // Pick the best crime based on success chances
