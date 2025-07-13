@@ -294,8 +294,7 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
           ];
         }
     } // Same as above if player is currently working for a megacorp
-    if (i == followPlayerSleeve && playerWorkInfo.type == "COMPANY" &&
-        ) {
+    if (i == followPlayerSleeve && playerWorkInfo.type == "COMPANY") {
         const companyName = playerWorkInfo.companyName;
         return [
             `work for company '${companyName}'`,
