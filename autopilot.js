@@ -498,7 +498,7 @@ export async function main(ns) {
 
         // Launch sleeves and allow them to also ignore the reserve so they can train up to boost gang unlock speed
         if ((10 in unlockedSFs) && (2 in unlockedSFs) && !findScript('sleeve.js')) {
-            let sleeveArgs = [];
+            let sleeveArgs = ["--disable-follow-player"];
             if (!options["disable-casino"] && !ranCasino)
                 sleeveArgs.push("--training-reserve", 300000); // Avoid training away our casino seed money
             if (options["disable-bladeburner"])
