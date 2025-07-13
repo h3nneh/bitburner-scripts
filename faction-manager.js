@@ -164,7 +164,7 @@ export async function main(ns) {
             ((Date.now() - resetInfo.lastAugReset) < 20 * 60 * 1000); // If we've been in the bitnode for less than 20 minutes, autopilot is configured to "quick-install", any aug is worthwhile in this time window 
         desiredStatsFilters = willTakeAnyAug ? ['*'] : // Take any aug if one of the above criteria is met
             bitNode == 8 ? ['hacking_level', 'hacking_exp'] : // In BN8, we only want to install if we will be boosting our hack level (to unlock Daedalus). We don't need rep as much, since it can be purchased immediately.
-                ['hacking', 'faction_rep', 'company_rep', 'charisma', 'hacknet', 'crime_money']; // Otherwise get hacking + rep boosting, etc. for unlocking augs more quickly
+                ['hacking', 'faction_rep', 'company_rep', 'charisma', 'hacknet']; // Otherwise get hacking + rep boosting, etc. for unlocking augs more quickly
     }
     log(ns, 'Desired stats filter: ' + JSON.stringify(desiredStatsFilters));
 

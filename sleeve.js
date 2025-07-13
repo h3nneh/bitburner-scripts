@@ -235,13 +235,13 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
             return shockRecoveryTask(sleeve, i, `there is a ${(options['shock-recovery'] * 100).toFixed(1)}% chance (--shock-recovery) of picking this task every minute until fully recovered.`);
     }
     // Train if our sleeve's physical stats aren't where we want them
-    if (canTrain) {
+    if (canTrain || playerWorkInfo.type == "CLASS") {
         const univClasses = {
             "hacking": ns.enums.UniversityClassType.algorithms,
             "charisma": ns.enums.UniversityClassType.leadership
         };
-        let untrainedStats = trainStats.filter(stat => sleeve.skills[stat] < options[`train-to-${stat}`]);
-        let untrainedSmarts = trainSmarts.filter(smart => sleeve.skills[smart] < options[`study-to-${smart}`]);
+        let untrainedStats = trainStats.filter(stat => sleeve.skills[stat] < options[`train-to-${stat}`] || playerWorkInfo.classType == stat);
+        let untrainedSmarts = trainSmarts.filter(smart => sleeve.skills[smart] < options[`study-to-${smart}`] || playerWorkInfo.classType == univClasses[smart]);
 
         // prioritize physical training
         if (untrainedStats.length > 0) {
@@ -283,26 +283,34 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
         // TODO: We should be able to borrow logic from work-for-factions.js to have more sleeves work for useful factions / companies
         // We'll cycle through work types until we find one that is supported. TODO: Auto-determine the most productive faction work to do.
         const faction = playerWorkInfo.factionName;
-        const work = works[workByFaction[faction] || 0];
-        return [
+        const work = await bestFactionWork(ns, sleeve, i, faction);
+        if (ns.formulas.work.factionGains(sleeve, work, 0).reputation / ns.formulas.work.factionGains(getPlayerInfo(ns), work, 0).reputation >= 0.05) {
+          return [
             `work for faction '${faction}' (${work})`,
             `ns.sleeve.setToFactionWork(ns.args[0], ns.args[1], ns.args[2])`,
             [i, faction, work],
             `helping earn rep with faction ${faction} by doing ${work} work.`
-        ];
+          ];
+        }
     } // Same as above if player is currently working for a megacorp
     if (i == followPlayerSleeve && playerWorkInfo.type == "COMPANY") {
         const companyName = playerWorkInfo.companyName;
-        return [
+        const player = await getPlayerInfo(ns);
+        const companyWork = player.jobs[companyName];
+        if (ns.formulas.work.companyGains(sleeve, companyName, companyWork, 0).reputation / ns.formulas.work.companyGains(player, companyName, companyWork, 0).reputation >= 0.05) {
+          return [
             `work for company '${companyName}'`,
             `ns.sleeve.setToCompanyWork(ns.args[0], ns.args[1])`,
             [i, companyName],
             `helping earn rep with company ${companyName}.`
-        ];
+          ];
+        }
     }
     // If gangs are available, prioritize homicide until we've got the requisite -54K karma to unlock them
+    // Pick the best crime based on success chances
+    var crime = options.crime || (await calculateCrimeChance(ns, sleeve, "Homicide")) >= options['homicide-chance-threshold'] ? 'Homicide' : 'Mug';
     if (!playerInGang && !options['disable-gang-homicide-priority'] && (2 in ownedSourceFiles) && ns.heart.break() > -54000)
-        return await crimeTask(ns, 'homicide', i, sleeve, 'we want gang karma'); // Ignore chance - even a failed homicide generates more Karma than every other crime
+        return await crimeTask(ns, crime, i, sleeve, 'we want gang karma'); // Ignore chance - even a failed homicide generates more Karma than every other crime
     // If the player is in bladeburner, and has already unlocked gangs with Karma, generate contracts and operations
     if (playerInBladeburner) {
         // Hack: Without paying much attention to what's happening in bladeburner, pre-assign a variety of tasks by sleeve index
@@ -346,12 +354,9 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
         /*   */ `ns.sleeve.setToBladeburnerAction(ns.args[0], ns.args[1], ns.args[2])`, [i, action, contractName ?? ''],
         /*   */ `doing ${action}${contractName ? ` - ${contractName}` : ''} in Bladeburner.`];
     }
-    // If there's nothing more productive to do (above) and there's still shock, prioritize recovery
-    if (sleeve.shock > 0)
-        return shockRecoveryTask(sleeve, i, `there appears to be nothing better to do`);
-    // Finally, do crime for Karma. Pick the best crime based on success chances
-    var crime = options.crime || (await calculateCrimeChance(ns, sleeve, "Homicide")) >= options['homicide-chance-threshold'] ? 'Homicide' : 'Mug';
-    return await crimeTask(ns, crime, i, sleeve, `there appears to be nothing better to do`);
+
+    // Finally, farm intelligence as there appears to be nothing better to do. 
+    return await farmIntelligence(ns, sleeve, i, `there appears to be nothing better to do`);
 }
 
 /** Helper to prepare the shock recovery task
@@ -373,6 +378,30 @@ async function crimeTask(ns, crime, i, sleeve, reason) {
     /*   */     ` (Note: Homicide chance would be ${((await calculateCrimeChance(ns, sleeve, "Homicide")) * 100).toFixed(2)}%)`)];
 }
 
+/**
+ * @param {NS} ns
+ * @param {object} sleeve
+ **/
+async function farmIntelligence(ns, sleeve, i, reason) {
+  let crime = 'Bond Forgery';
+  let successChance = await calculateCrimeChance(ns, sleeve, crime);
+  if (successChance > 0.75 ) {
+    return [`commit ${crime}`, `ns.sleeve.setToCommitCrime(ns.args[0], ns.args[1])`, [i, crime],
+    /*   */ `committing ${crime} with chance ${(successChance * 100).toFixed(2)}% because ${reason}`];
+  }
+
+  crime = 'Larceny';
+  successChance = await calculateCrimeChance(ns, sleeve, crime);
+  if (successChance > 0.75) {
+    return [`commit ${crime}`, `ns.sleeve.setToCommitCrime(ns.args[0], ns.args[1])`, [i, crime],
+    /*   */ `committing ${crime} with chance ${(successChance * 100).toFixed(2)}% because ${reason}`];
+  }
+
+  crime = 'Rob Store';
+  successChance = await calculateCrimeChance(ns, sleeve, crime);
+  return [`commit ${crime}`, `ns.sleeve.setToCommitCrime(ns.args[0], ns.args[1])`, [i, crime],
+  /*   */ `committing ${crime} with chance ${(successChance * 100).toFixed(2)}% because ${reason}`];
+}
 
 /** Sets a sleeve to its designated task, with some extra error handling logic for working for factions.
  * @param {NS} ns
@@ -390,19 +419,8 @@ async function setSleeveTask(ns, i, designatedTask, command, args) {
             return true;
         }
     } catch { }
-    // If assigning the task failed...
-    lastRerollTime[i] = 0;
     // If working for a faction, it's possible he current work isn't supported, so try the next one.
-    if (designatedTask.startsWith('work for faction')) {
-        const faction = args[1]; // Hack: Not obvious, but the second argument will be the faction name in this case.
-        let nextWorkIndex = (workByFaction[faction] || 0) + 1;
-        if (nextWorkIndex >= works.length) {
-            log(ns, `WARN: Failed to ${strAction}. None of the ${works.length} work types appear to be supported. Will loop back and try again.`, true, 'warning');
-            nextWorkIndex = 0;
-        } else
-            log(ns, `INFO: Failed to ${strAction} - work type may not be supported. Trying the next work type (${works[nextWorkIndex]})`);
-        workByFaction[faction] = nextWorkIndex;
-    } else if (designatedTask.startsWith('Bladeburner')) { // Bladeburner action may be out of operations
+    if (designatedTask.startsWith('Bladeburner')) { // Bladeburner action may be out of operations
         bladeburnerCooldown[i] = Date.now(); // There will be a cooldown before this task is assigned again.
     } else
         log(ns, `ERROR: Failed to ${strAction}`, true, 'error');
@@ -443,4 +461,38 @@ async function calculateCrimeChance(ns, sleeve, crimeName) {
     chance /= 975;
     chance /= crimeStats.difficulty;
     return Math.min(chance, 1);
+}
+
+/** @param {NS} ns
+ * @param {SleevePerson} sleeve
+ * @param {number} i
+ * @param {string} faction
+ * Best faction work */
+async function bestFactionWork(ns, sleeve, i, faction) {
+  let hackGain = ns.formulas.work.factionGains(sleeve, "hacking", 0).reputation;
+  let fieldGain = ns.formulas.work.factionGains(sleeve, "field", 0).reputation;
+  let secGain = ns.formulas.work.factionGains(sleeve, "security", 0).reputation;
+  let order = []
+
+  if (hackGain > fieldGain && hackGain > secGain) {
+    if (fieldGain > secGain) order = ["hacking", "field", "security"];
+    else order = ["hacking", "security", "field"];
+  }
+  else if (fieldGain > hackGain && fieldGain > secGain) {
+    if (hackGain > secGain) order = ["field", "hacking", "security"];
+    else order = ["field", "security", "hacking"];
+  }
+  else {
+    if (fieldGain > hackGain) order = ["security", "field", "hacking"];
+    else order = ["security", "hacking", "field"];
+  }
+
+  for (const work of order) {
+    try { // Assigning a task can throw an error rather than simply returning false. We must suppress this
+      if (!await getNsDataThroughFile(ns, `ns.sleeve.setToFactionWork(ns.args[0], ns.args[1], ns.args[2])`, `/Temp/sleeve-setToFactionWork.txt`, [i, faction, work])) {
+        continue; // This type of faction work must not be supported
+      }
+    } catch { }
+    return work;
+  }
 }
