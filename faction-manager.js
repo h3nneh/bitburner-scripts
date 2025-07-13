@@ -576,7 +576,7 @@ function sortAugs(ns, augs = []) {
     }
     // TODO: Logic below is **almost** working, except that the "batch detection" is flawed - it does not detect when multiple separate
     //       "trees" of dependencies with a common root are side-by-side (e.g. "Embedded Netburner Module" tree). Until fixed, we cannot bubble.
-    return augs;
+    //return augs;
     // Since we are no longer most-expensive to least-expensive, the "ideal purchase order" is more complicated.
     // So now see if moving each chunk of prereqs down a slot reduces the overall price.
     let initialCost = getTotalCost(augs);
@@ -585,6 +585,7 @@ function sortAugs(ns, augs = []) {
         let batchLengh = 1; // Look for a "batch" of prerequisites, evidenced by augs above this one being cheaper instead of more expensive
         while (i - batchLengh >= 0 && augs[i].price > augs[i - batchLengh].price) batchLengh++;
         if (batchLengh == 1) continue; // Not the start of a batch of prerequisites
+        if (augs[i].prereqs.includes(augs[i - batchLengh])) continue;
         //log(ns, `Detected a batch of length ${batchLengh} from ${augs[i - batchLengh + 1].name} to ${augs[i].name}`);
         let moved = 0, bestCost = initialCost;
         while (i + moved + 1 < augs.length) { // See if promoting augs from below the batch to above the batch reduces the overall cost
