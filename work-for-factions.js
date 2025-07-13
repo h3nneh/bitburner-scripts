@@ -123,6 +123,7 @@ const breakToMainLoop = () => Date.now() > mainLoopStart + checkForNewPriorities
 /** @param {NS} ns */
 export async function main(ns) {
     const runOptions = getConfiguration(ns, argsSchema);
+    const resetInfo = await getResetInfoRd(ns);
     if (!runOptions || await instanceCount(ns) > 1) return; // Prevent multiple instances of this script from being started, even with different args.
     options = runOptions; // We don't set the global "options" until we're sure this is the only running instance
     disableLogs(ns, ['sleep']);
@@ -137,7 +138,7 @@ export async function main(ns) {
     // Default desired-stats if none were specified
     if (options['desired-stats'].length == 0)
         options['desired-stats'] = options['crime-focus'] ? ['str', 'def', 'dex', 'agi', 'faction_rep', 'hacknet', 'crime'] :
-            await getResetInfoRd(ns).currentBitnode == 8 ? ['hacking', 'hacking_exp'] :
+            resetInfo.currentBitnode == 8 ? ['hacking', 'hacking_exp'] :
             ['hacking', 'faction_rep', 'company_rep', 'charisma', 'hacknet']
     // Default desired-augs if none were specified
     if (options['desired-augs'].length == 0)
@@ -496,7 +497,7 @@ async function earnFactionInvite(ns, factionName) {
           deficientStats.length > 2) {
           doCrime = true;
         } else {
-          while (!breakToMainLoop() && !workedForInvite) {
+          while (!breakToMainLoop() && !workedForInvite && player.money >= 5e6) {
             await gymWrapper(ns, "strength", requirement);
             await gymWrapper(ns, "defense", requirement);
             await gymWrapper(ns, "dexterity", requirement);
@@ -550,7 +551,7 @@ async function earnFactionInvite(ns, factionName) {
                 `(${formatNumberShort(bitNodeMults.HackingLevelMultiplier)}) / (${formatNumberShort(bitNodeMults.ClassGymExpGain)}) ` +
                 `are probably too low to increase hack from ${player.skills.hacking} to ${requirement} in a reasonable amount of time ` +
                 `(${hackHeuristic} < ${formatNumberShort(em, 2)} - configure with --training-stat-per-multi-threshold)`);
-        else if (exp_requirement / (ns.formulas.work.universityGains(player, "Algorithms", gymByCity["Volhaven"]).hackExp * 5) > 15 * 60)
+        else if (exp_requirement / (ns.formulas.work.universityGains(player, player.money > options['pay-for-studies-threshold'] ? "Study Computer Science" : "Algorithms", uniByCity["Volhaven"]).hackExp * 5) > 15 * 60)
           return ns.print(`Study hacking takes too long. (> 15 min)`);
         let studying = false;
         if (player.money > options['pay-for-studies-threshold']) { // If we have sufficient money, pay for the best studies
@@ -762,12 +763,12 @@ async function monitorStudies(ns, stat, requirement) {
           try {
             switch (stat) {
               case "hacking" : eta_milliseconds = 
-                1000 * (ns.formulas.skills.calculateExp(requirement, player.mults.hacking * ns.getBitNodeMultipliers().HackingLevelMultiplier) - ns.formulas.skills.calculateExp(player.skills[stat], player.mults.hacking * ns.getBitNodeMultipliers().HackingLevelMultiplier)) 
+                1000 * (ns.formulas.skills.calculateExp(requirement, player.mults.hacking * bitNodeMults.HackingLevelMultiplier) - ns.formulas.skills.calculateExp(player.skills[stat], player.mults.hacking * bitNodeMults.HackingLevelMultiplier)) 
                 / (ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).hackExp * 5);
                 break;
               
               case "charisma" : eta_milliseconds = 
-                1000 * (ns.formulas.skills.calculateExp(requirement, player.mults.charisma * ns.getBitNodeMultipliers().CharismaLevelMultiplier) - ns.formulas.skills.calculateExp(player.skills[stat], player.mults.charisma * ns.getBitNodeMultipliers().CharismaLevelMultiplier)) 
+                1000 * (ns.formulas.skills.calculateExp(requirement, player.mults.charisma * bitNodeMults.CharismaLevelMultiplier) - ns.formulas.skills.calculateExp(player.skills[stat], player.mults.charisma * bitNodeMults.CharismaLevelMultiplier)) 
                 / (ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).chaExp * 5);
                 break;
             }
@@ -844,22 +845,22 @@ async function monitorGym(ns, stat, requirement) {
           try {
             switch (stat) {
               case "strength" : eta_milliseconds = 
-                1000 * (ns.formulas.skills.calculateExp(requirement, player.mults.strength * ns.getBitNodeMultipliers().StrengthLevelMultiplier) - ns.formulas.skills.calculateExp(player.skills[stat], player.mults.strength * ns.getBitNodeMultipliers().StrengthLevelMultiplier)) 
+                1000 * (ns.formulas.skills.calculateExp(requirement, player.mults.strength * bitNodeMults.StrengthLevelMultiplier) - ns.formulas.skills.calculateExp(player.skills[stat], player.mults.strength * bitNodeMults.StrengthLevelMultiplier)) 
                 / (ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).strExp * 5);
                 break;
               
               case "defense" : eta_milliseconds = 
-                1000 * (ns.formulas.skills.calculateExp(requirement, player.mults.defense * ns.getBitNodeMultipliers().DefenseLevelMultiplier) - ns.formulas.skills.calculateExp(player.skills[stat], player.mults.defense * ns.getBitNodeMultipliers().DefenseLevelMultiplier)) 
+                1000 * (ns.formulas.skills.calculateExp(requirement, player.mults.defense * bitNodeMults.DefenseLevelMultiplier) - ns.formulas.skills.calculateExp(player.skills[stat], player.mults.defense * bitNodeMults.DefenseLevelMultiplier)) 
                 / (ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).defExp * 5);
                 break;
 
               case "dexterity" : eta_milliseconds = 
-                1000 * (ns.formulas.skills.calculateExp(requirement, player.mults.dexterity * ns.getBitNodeMultipliers().DexterityLevelMultiplier) - ns.formulas.skills.calculateExp(player.skills[stat], player.mults.dexterity * ns.getBitNodeMultipliers().DexterityLevelMultiplier)) 
+                1000 * (ns.formulas.skills.calculateExp(requirement, player.mults.dexterity * bitNodeMults.DexterityLevelMultiplier) - ns.formulas.skills.calculateExp(player.skills[stat], player.mults.dexterity * bitNodeMults.DexterityLevelMultiplier)) 
                 / (ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).dexExp * 5);
                 break;
 
               case "agility" : eta_milliseconds = 
-                1000 * (ns.formulas.skills.calculateExp(requirement, player.mults.agility * ns.getBitNodeMultipliers().AgilityLevelMultiplier) - ns.formulas.skills.calculateExp(player.skills[stat], player.mults.agility * ns.getBitNodeMultipliers().AgilityLevelMultiplier)) 
+                1000 * (ns.formulas.skills.calculateExp(requirement, player.mults.agility * bitNodeMults.AgilityLevelMultiplier) - ns.formulas.skills.calculateExp(player.skills[stat], player.mults.agility * bitNodeMults.AgilityLevelMultiplier)) 
                 / (ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).agiExp * 5);
                 break;
             }
@@ -1361,7 +1362,7 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
             if (hasFormulas) {
               try { 
                 eta_milliseconds = 
-                  1000 * (ns.formulas.skills.calculateExp(requiredCha, player.mults.charisma * ns.getBitNodeMultipliers().CharismaLevelMultiplier) - ns.formulas.skills.calculateExp(player.skills.charisma, player.mults.charisma * ns.getBitNodeMultipliers().CharismaLevelMultiplier)) 
+                  1000 * (ns.formulas.skills.calculateExp(requiredCha, player.mults.charisma * bitNodeMults.CharismaLevelMultiplier) - ns.formulas.skills.calculateExp(player.skills.charisma, player.mults.charisma * bitNodeMults.CharismaLevelMultiplier)) 
                   / (ns.formulas.work.universityGains(player, "Leadership", "ZB Institute of Technology").chaExp * 5);
               }
               catch {}
@@ -1382,7 +1383,7 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
               decidedNotToStudy = true;
             } else // On any loop, we can change our mind and decide studying is worthwhile
                 decidedNotToStudy = false;
-            if (!decidedNotToStudy) {
+            if (!decidedNotToStudy || companyConfig.name == "Silhouette") {
                 status = `Studying at ZB university until Cha reaches ${requiredCha}...  ${eta_milliseconds == -1 ? "" : `(ETA:${formatDuration(eta_milliseconds)})`}\n` + status;
                 // TODO: See if we can re-use the function "monitorStudies" here instead of duplicating a lot of the same code.
                 let classType = currentWork.classType;
