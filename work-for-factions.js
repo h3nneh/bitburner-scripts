@@ -1092,7 +1092,9 @@ export async function workForSingleFaction(ns, factionName, forceUnlockDonations
     }
 
     let currentReputation = await getFactionReputation(ns, factionName);
-    const repGainRate = await measureFactionRepGainRate(ns, factionName);
+    let player = await getPlayerInfo(ns);
+    let playerWorkInfo = await getCurrentWorkInfo(ns);
+    let repGainRate = ns.formulas.work.factionGains(player, playerWorkInfo.factionWorkType, startingFavor).reputation * 5;
     // If the best faction aug is within 10% of our current rep, grind all the way to it so we can get it immediately, regardless of our current rep target
     if (forceBestAug || highestRepAug <= 1.1 * Math.max(currentReputation, factionRepRequired))
         factionRepRequired = Math.max(highestRepAug, factionRepRequired);
@@ -1100,7 +1102,7 @@ export async function workForSingleFaction(ns, factionName, forceUnlockDonations
     if (currentReputation >= factionRepRequired)
         return ns.print(`Faction "${factionName}" required rep of ${Math.round(factionRepRequired).toLocaleString('en')} has already been attained ` +
             `(Current rep: ${Math.round(currentReputation).toLocaleString('en')}). Skipping working for faction...`)
-    if ((medianRepDesiredAugByFaction[factionName] - currentReputation) / repGainRate > 90 * 60)
+    if ((medianRepDesiredAugByFaction[factionName] - currentReputation) / repGainRate > 90 * 60 && scope <= 2)
         return ns.print(`Skipping working for faction as gaining half the augs from '${factionName}' takes longer than 90 mins.`);
     ns.print(`Faction "${factionName}" Highest Aug Req: ${highestRepAug?.toLocaleString('en')}, Current Favor (` +
         `${startingFavor?.toFixed(2)}/${favorToDonate?.toFixed(2)}) Req: ${Math.round(favorRepRequired).toLocaleString('en')}`);
@@ -1150,6 +1152,7 @@ export async function workForSingleFaction(ns, factionName, forceUnlockDonations
             lastFactionWorkStatus = status;
             lastStatusUpdateTime = Date.now();
             // Measure approximately how quickly we're gaining reputation to give a rough ETA
+            repGainRate = await measureFactionRepGainRate(ns, factionName);
             const eta_milliseconds = 1000 * (factionRepRequired - currentReputation) / repGainRate;
             ns.print(`${status} Currently at ${Math.round(currentReputation).toLocaleString('en')}, ` +
                 `earning ${formatNumberShort(repGainRate)} rep/sec. ` +
