@@ -235,7 +235,7 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
             return shockRecoveryTask(sleeve, i, `there is a ${(options['shock-recovery'] * 100).toFixed(1)}% chance (--shock-recovery) of picking this task every minute until fully recovered.`);
     }
     // Train if our sleeve's physical stats aren't where we want them
-    if (canTrain || playerWorkInfo.type == "CLASS") {
+    if (canTrain || (playerWorkInfo.type == "CLASS" && playerInfo.money >= 5e6)) {
         const univClasses = {
             "hacking": (playerInfo.money < 5e6) ? ns.enums.UniversityClassType.computerScience : ns.enums.UniversityClassType.algorithms,
             "charisma": ns.enums.UniversityClassType.leadership
