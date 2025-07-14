@@ -106,7 +106,7 @@ let shouldFocus; // Whether we should focus on work or let it be backgrounded (b
 // And a bunch of globals because managing state and encapsulation is hard.
 let hasFocusPenalty, hasSimulacrum, favorToDonate, fulcrumHackReq, notifiedAboutDaedalus, playerInBladeburner, wasGrafting, currentBitnode;
 let dictSourceFiles, dictFactionFavors, playerGang, mainLoopStart, scope, numJoinedFactions, lastTravel, crimeCount;
-let firstFactions, skipFactions, completedFactions, softCompletedFactions, mostExpensiveAugByFaction, mostExpensiveDesiredAugByFaction;
+let firstFactions, skipFactions, completedFactions, softCompletedFactions, mostExpensiveAugByFaction, mostExpensiveDesiredAugByFaction, medianRepDesiredAugByFaction;
 let bitNodeMults = (/**@returns{BitNodeMultipliers}*/() => undefined)(); // Trick to get strong typing in mono
 
 export function autocomplete(data, args) {
@@ -227,6 +227,14 @@ async function loadStartupData(ns) {
             Object.keys(dictAugStats[aug]).some(key => options['desired-stats'].some(stat => key.includes(stat) && dictAugStats[aug][key] > 1))
         )).reduce((max, aug) => Math.max(max, dictAugRepReqs[aug]), -1)]));
     //ns.print("Most expensive desired aug by faction: " + JSON.stringify(mostExpensiveDesiredAugByFaction));
+
+    medianRepDesiredAugByFaction = Object.fromEntries(allKnownFactions.map(f => [f,
+        medianRep(dictFactionAugs[f].filter(aug => !ownedAugmentations.includes(aug) && (
+            options['desired-augs'].includes(aug) ||
+            Object.keys(dictAugStats[aug]).length == 0 || options['desired-stats'].length == 0 ||
+            Object.keys(dictAugStats[aug]).some(key => options['desired-stats'].some(stat => key.includes(stat) && dictAugStats[aug][key] > 1))
+        )), dictAugRepReqs)
+    ]));
 
     // Filter out factions who have no augs (or tentatively filter those with no desirable augs) unless otherwise configured. The exception is
     // we will always filter the most-precluding city factions, (but not ["Chongqing", "New Tokyo", "Ishima"], which can all be joined simultaneously)
@@ -551,7 +559,11 @@ async function earnFactionInvite(ns, factionName) {
                 `(${formatNumberShort(bitNodeMults.HackingLevelMultiplier)}) / (${formatNumberShort(bitNodeMults.ClassGymExpGain)}) ` +
                 `are probably too low to increase hack from ${player.skills.hacking} to ${requirement} in a reasonable amount of time ` +
                 `(${hackHeuristic} < ${formatNumberShort(em, 2)} - configure with --training-stat-per-multi-threshold)`);
-        else if (exp_requirement / (ns.formulas.work.universityGains(player, player.money > options['pay-for-studies-threshold'] ? "Study Computer Science" : "Algorithms", uniByCity["Volhaven"]).hackExp * 5) > 15 * 60)
+        else if (exp_requirement / 
+                  (ns.formulas.work.universityGains(
+                    player, 
+                    player.money < options['pay-for-studies-threshold'] ? "Study Computer Science" : "Algorithms", 
+                    player.money < options['pay-for-studies-threshold'] ? uniByCity[player.city] : uniByCity["Volhaven"]).hackExp * 5) > 15 * 60)
           return ns.print(`Study hacking takes too long. (> 15 min)`);
         let studying = false;
         if (player.money > options['pay-for-studies-threshold']) { // If we have sufficient money, pay for the best studies
@@ -1080,6 +1092,7 @@ export async function workForSingleFaction(ns, factionName, forceUnlockDonations
     }
 
     let currentReputation = await getFactionReputation(ns, factionName);
+    const repGainRate = await measureFactionRepGainRate(ns, factionName);
     // If the best faction aug is within 10% of our current rep, grind all the way to it so we can get it immediately, regardless of our current rep target
     if (forceBestAug || highestRepAug <= 1.1 * Math.max(currentReputation, factionRepRequired))
         factionRepRequired = Math.max(highestRepAug, factionRepRequired);
@@ -1087,7 +1100,8 @@ export async function workForSingleFaction(ns, factionName, forceUnlockDonations
     if (currentReputation >= factionRepRequired)
         return ns.print(`Faction "${factionName}" required rep of ${Math.round(factionRepRequired).toLocaleString('en')} has already been attained ` +
             `(Current rep: ${Math.round(currentReputation).toLocaleString('en')}). Skipping working for faction...`)
-
+    if ((medianRepDesiredAugByFaction[factionName] - currentReputation) / repGainRate > 90 * 60)
+        return ns.print(`Skipping working for faction as gaining half the augs from '${factionName}' takes longer than 90 mins.`);
     ns.print(`Faction "${factionName}" Highest Aug Req: ${highestRepAug?.toLocaleString('en')}, Current Favor (` +
         `${startingFavor?.toFixed(2)}/${favorToDonate?.toFixed(2)}) Req: ${Math.round(favorRepRequired).toLocaleString('en')}`);
     if (options['invites-only'])
@@ -1136,7 +1150,6 @@ export async function workForSingleFaction(ns, factionName, forceUnlockDonations
             lastFactionWorkStatus = status;
             lastStatusUpdateTime = Date.now();
             // Measure approximately how quickly we're gaining reputation to give a rough ETA
-            const repGainRate = await measureFactionRepGainRate(ns, factionName);
             const eta_milliseconds = 1000 * (factionRepRequired - currentReputation) / repGainRate;
             ns.print(`${status} Currently at ${Math.round(currentReputation).toLocaleString('en')}, ` +
                 `earning ${formatNumberShort(repGainRate)} rep/sec. ` +
@@ -1468,4 +1481,21 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
     ns.print(`Stopped working for "${companyName}" repRequiredForFaction: ${repRequiredForFaction.toLocaleString('en')} ` +
         `currentReputation: ${Math.round(currentReputation).toLocaleString('en')} inFaction: ${player.factions.includes(factionName)}`);
     return false;
+}
+
+function medianRep(arr, dictAugRepReqs) {
+    // Sort the array
+    arr.sort((a, b) => dictAugRepReqs[a] - dictAugRepReqs[b]);
+
+    const length = arr.length;
+    const middle = Math.floor(length / 2);
+
+    // Check if the array length is even or odd
+    if (length % 2 === 0) {
+        // If even, return the average of middle two elements
+        return (dictAugRepReqs[arr[middle - 1]] + dictAugRepReqs[arr[middle]]) / 2;
+    } else {
+        // If odd, return the middle element
+        return dictAugRepReqs[arr[middle]];
+    }
 }
