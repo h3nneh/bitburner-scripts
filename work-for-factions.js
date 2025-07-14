@@ -764,12 +764,12 @@ async function monitorStudies(ns, stat, requirement) {
             switch (stat) {
               case "hacking" : eta_milliseconds = 
                 1000 * (ns.formulas.skills.calculateExp(requirement, player.mults.hacking * bitNodeMults.HackingLevelMultiplier) - ns.formulas.skills.calculateExp(player.skills[stat], player.mults.hacking * bitNodeMults.HackingLevelMultiplier)) 
-                / (ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).hackExp * 5);
+                / (ns.formulas.work.universityGains(player, currentWork.classType, currentWork.location).hackExp * 5);
                 break;
               
               case "charisma" : eta_milliseconds = 
                 1000 * (ns.formulas.skills.calculateExp(requirement, player.mults.charisma * bitNodeMults.CharismaLevelMultiplier) - ns.formulas.skills.calculateExp(player.skills[stat], player.mults.charisma * bitNodeMults.CharismaLevelMultiplier)) 
-                / (ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).chaExp * 5);
+                / (ns.formulas.work.universityGains(player, currentWork.classType, currentWork.location).chaExp * 5);
                 break;
             }
           } catch { }
