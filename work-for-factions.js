@@ -1093,8 +1093,18 @@ export async function workForSingleFaction(ns, factionName, forceUnlockDonations
 
     let currentReputation = await getFactionReputation(ns, factionName);
     let player = await getPlayerInfo(ns);
-    let playerWorkInfo = await getCurrentWorkInfo(ns);
-    let repGainRate = ns.formulas.work.factionGains(player, playerWorkInfo.factionWorkType, startingFavor).reputation * 5;
+    let repGainRate = 0;
+    let hasFormulas = ns.fileExists("Formulas.exe", "home");
+    if (hasFormulas) {
+      try { 
+        repGainRate = Math.max(
+          [ns.formulas.work.factionGains(player, ns.enums.FactionWorkType.hacking, startingFavor).reputation * 5],
+          [ns.formulas.work.factionGains(player, ns.enums.FactionWorkType.security, startingFavor).reputation * 5],
+          [ns.formulas.work.factionGains(player, ns.enums.FactionWorkType.field, startingFavor).reputation * 5]
+        );
+      }
+      catch {}
+    }
     // If the best faction aug is within 10% of our current rep, grind all the way to it so we can get it immediately, regardless of our current rep target
     if (forceBestAug || highestRepAug <= 1.1 * Math.max(currentReputation, factionRepRequired))
         factionRepRequired = Math.max(highestRepAug, factionRepRequired);
