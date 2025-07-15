@@ -296,7 +296,7 @@ async function mainLoop(ns) {
                     await earnFactionInvite(ns, factionName);
             }
         }
-    }
+    }        
     // If something outside of this script is stealing player focus, decide whether to allow it
     if (await isValidInterruption(ns))
         return (await ns.sleep(loopSleepInterval));
@@ -1112,8 +1112,9 @@ export async function workForSingleFaction(ns, factionName, forceUnlockDonations
     if (currentReputation >= factionRepRequired)
         return ns.print(`Faction "${factionName}" required rep of ${Math.round(factionRepRequired).toLocaleString('en')} has already been attained ` +
             `(Current rep: ${Math.round(currentReputation).toLocaleString('en')}). Skipping working for faction...`)
-    if ((medianRepDesiredAugByFaction[factionName] - currentReputation) / repGainRate > 90 * 60 && scope <= 2)
-        return ns.print(`Skipping working for faction as gaining half the augs from '${factionName}' takes longer than 90 mins.`);
+    // TODO: check for better implementation
+    //if ((medianRepDesiredAugByFaction[factionName] - currentReputation) / repGainRate > 1.5 * 60 * 60 && scope <= 1)
+        //return ns.print(`Skipping working for faction as gaining half the augs from '${factionName}' takes longer than 90 mins.`);
     ns.print(`Faction "${factionName}" Highest Aug Req: ${highestRepAug?.toLocaleString('en')}, Current Favor (` +
         `${startingFavor?.toFixed(2)}/${favorToDonate?.toFixed(2)}) Req: ${Math.round(favorRepRequired).toLocaleString('en')}`);
     if (options['invites-only'])
