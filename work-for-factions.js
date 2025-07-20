@@ -329,7 +329,7 @@ async function mainLoop(ns) {
     }
 
     // Remove Fulcrum from our "EarlyFactionOrder" if hack level is insufficient to backdoor their server
-    let priorityFactions = options['crime-focus'] ? preferredCrimeFactionOrder.slice() : preferredEarlyFactionOrder.slice();
+    let priorityFactions = options['crime-focus'] || (currentBitnode == 2 && !playerGang) ? preferredCrimeFactionOrder.slice() : preferredEarlyFactionOrder.slice();
     if (player.skills.hacking < fulcrumHackReq - 10) { // Assume that if we're within 10, we'll get there by the time we've earned the invite
         const fulcrumIdx = priorityFactions.findIndex(c => c == "Fulcrum Secret Technologies")
         if (fulcrumIdx !== -1) {
