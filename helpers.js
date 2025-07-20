@@ -572,6 +572,10 @@ export async function getActiveSourceFiles_Custom(ns, fnGetNsDataThroughFile, in
         dictSourceFiles[resetInfo.currentNode] = Math.max(effectiveSfLevel, dictSourceFiles[resetInfo.currentNode] || 0);
     }
 
+    if (dictSourceFiles[14] === 1 && resetInfo.currentNode === 14) {
+      dictSourceFiles[14] = 2;
+    }
+
     // If any bitNodeOptions were set, it might reduce our source file levels for gameplay purposes,
     // but the game currently has a bug where getOwnedSourceFiles won't reflect this, so we must do it ourselves.
     if ((resetInfo?.bitNodeOptions?.sourceFileOverrides?.size ?? 0) > 0) {
