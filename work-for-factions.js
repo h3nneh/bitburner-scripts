@@ -1514,11 +1514,10 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
             ns.print(`Currently a "${player.jobs[companyName]}" ('${currentRole}' #${currentJobTier}) for "${companyName}" earning ${formatNumberShort(repGainRate)} rep/sec. ` +
                 (hasFocusPenalty && !shouldFocus ? `(after 20% non-focus Penalty)` : '') + `\n` +
                 `${status}\nCurrent player stats are Hack:${player.skills.hacking} ${player.skills.hacking >= (requiredHack || 0) ? '✓' : '✗'} ` +
-                bestRoleName == "Security"  ? `Str:${player.skills.strength} ${player.skills.strength >= (requiredStr || 0) ? '✓' : '✗'} ` +
-                                              `Def:${player.skills.defense} ${player.skills.defense >= (requiredDef || 0) ? '✓' : '✗'} ` +
-                                              `Dex:${player.skills.dexterity} ${player.skills.dexterity >= (requiredDex || 0) ? '✓' : '✗'} ` +
-                                              `Agi:${player.skills.agility} ${player.skills.agility >= (requiredAgi || 0) ? '✓' : '✗'} ` 
-                                            : "" +
+                `Str:${player.skills.strength} ${player.skills.strength >= (requiredStr || 0) ? '✓' : '✗'} ` +
+                `Def:${player.skills.defense} ${player.skills.defense >= (requiredDef || 0) ? '✓' : '✗'} ` +
+                `Dex:${player.skills.dexterity} ${player.skills.dexterity >= (requiredDex || 0) ? '✓' : '✗'} ` +
+                `Agi:${player.skills.agility} ${player.skills.agility >= (requiredAgi || 0) ? '✓' : '✗'} ` +
                 `Cha:${player.skills.charisma} ${player.skills.charisma >= (requiredCha || 0) ? '✓' : '✗'} ` +
                 `Rep:${Math.round(currentReputation).toLocaleString('en')} ${currentReputation >= (requiredRep || repRequiredForFaction) ? '✓' : `✗ (ETA: ${eta})`}`);
         }
