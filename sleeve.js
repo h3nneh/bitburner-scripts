@@ -1,10 +1,10 @@
-import { log, getConfiguration, instanceCount, disableLogs, getActiveSourceFiles, getNsDataThroughFile, runCommand, formatMoney, formatDuration } from './helpers.js'
+import { log, getConfiguration, instanceCount, disableLogs, getActiveSourceFiles, getNsDataThroughFile, runCommand, formatMoney, formatDuration, tryGetBitNodeMultipliers } from './helpers.js'
 
 const argsSchema = [
     ['min-shock-recovery', 97], // Minimum shock recovery before attempting to train or do crime (Set to 100 to disable, 0 to recover fully)
     ['shock-recovery', 0.05], // Set to a number between 0 and 1 to devote that ratio of time to periodic shock recovery (until shock is at 0)
     ['crime', null], // If specified, sleeves will perform only this crime regardless of stats
-    ['homicide-chance-threshold', 0.5], // Sleeves on crime will automatically start homicide once their chance of success exceeds this ratio
+    ['homicide-chance-threshold', 0.05], // Sleeves on crime will automatically start homicide once their chance of success exceeds this ratio
     ['disable-gang-homicide-priority', false], // By default, sleeves will do homicide to farm Karma until we're in a gang. Set this flag to disable this priority.
     ['aug-budget', 0.1], // Spend up to this much of current cash on augs per tick (Default is high, because these are permanent for the rest of the BN)
     ['buy-cooldown', 60 * 1000], // Must wait this may milliseconds before buying more augs for a sleeve
@@ -33,6 +33,7 @@ const statusUpdateInterval = 10 * 60 * 1000; // Log sleeve status this often, ev
 const trainingReserveFile = '/Temp/sleeves-training-reserve.txt';
 const works = ['security', 'field', 'hacking']; // When doing faction work, we prioritize physical work since sleeves tend towards having those stats be highest
 const trainStats = ['strength', 'defense', 'dexterity', 'agility'];
+const trainStatsMap = {'strength': 'str', 'defense': 'def', 'dexterity': 'dex', 'agility': 'agi'};
 const trainSmarts = ['hacking', 'charisma'];
 const sleeveBbContractNames = ["Tracking", "Bounty Hunter", "Retirement"];
 const minBbContracts = 2; // There should be this many contracts remaining before sleeves attempt them
@@ -240,8 +241,8 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
             "hacking": (playerInfo.money < 5e6) ? ns.enums.UniversityClassType.computerScience : ns.enums.UniversityClassType.algorithms,
             "charisma": ns.enums.UniversityClassType.leadership
         };
-        let untrainedStats = trainStats.filter(stat => sleeve.skills[stat] < options[`train-to-${stat}`] || playerWorkInfo.classType == stat);
-        let untrainedSmarts = trainSmarts.filter(smart => sleeve.skills[smart] < options[`study-to-${smart}`] || playerWorkInfo.classType == univClasses[smart]);
+        let untrainedStats = trainStats.filter(stat => (sleeve.skills[stat] < options[`train-to-${stat}`] && canTrain) || playerWorkInfo.classType == trainStatsMap[stat]);
+        let untrainedSmarts = trainSmarts.filter(smart => (sleeve.skills[smart] < options[`study-to-${smart}`] && canTrain) || playerWorkInfo.classType == univClasses[smart]);
 
         // prioritize physical training
         if (untrainedStats.length > 0) {
@@ -448,6 +449,7 @@ async function calculateCrimeChance(ns, sleeve, crimeName) {
         crimeName == "Homicide" ? { difficulty: 1, strength_success_weight: 2, defense_success_weight: 2, dexterity_success_weight: 0.5, agility_success_weight: 0.5 } :
             crimeName == "Mug" ? { difficulty: 0.2, strength_success_weight: 1.5, defense_success_weight: 0.5, dexterity_success_weight: 1.5, agility_success_weight: 0.5, } :
                 undefined));
+    let bitnodeMult = await tryGetBitNodeMultipliers(ns);
     let chance =
         (crimeStats.hacking_success_weight || 0) * sleeve.skills.hacking +
         (crimeStats.strength_success_weight || 0) * sleeve.skills.strength +
@@ -457,6 +459,8 @@ async function calculateCrimeChance(ns, sleeve, crimeName) {
         (crimeStats.charisma_success_weight || 0) * sleeve.skills.charisma;
     chance /= 975;
     chance /= crimeStats.difficulty;
+    chance *= bitnodeMult.CrimeSuccessRate;
+    chance *= sleeve.mults.crime_success;
     return Math.min(chance, 1);
 }
 
