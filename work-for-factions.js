@@ -47,6 +47,11 @@ const jobs = [ // Job stat requirements for a company with a base stat modifier 
         name: "IT",
         reqRep: [0e0, 7e3, 35e3, 175e3],
         reqHck: [225, 250, 275, 375], // [1, 26, 51, 151] + 224
+        reqHck: [0, 0, 0, 0],
+        reqStr: [0, 0, 0, 0],
+        reqDef: [0, 0, 0, 0],
+        reqDex: [0, 0, 0, 0],
+        reqAgi: [0, 0, 0, 0],
         reqCha: [0e0, 0e0, 275, 300], // [0,  0, 51,  76] + 224
         repMult: [0.9, 1.1, 1.3, 1.4]
     },
@@ -54,10 +59,27 @@ const jobs = [ // Job stat requirements for a company with a base stat modifier 
         name: "Software",
         reqRep: [0e0, 8e3, 4e4, 2e5, 4e5, 8e5, 16e5, 32e5],
         reqHck: [225, 275, 475, 625, 725, 725, 825, 975],   // [1, 51, 251, 401, 501, 501, 601, 751] + 224
+        reqHck: [0, 0, 0, 0],
+        reqStr: [0, 0, 0, 0],
+        reqDef: [0, 0, 0, 0],
+        reqDex: [0, 0, 0, 0],
+        reqAgi: [0, 0, 0, 0],
         reqCha: [0e0, 0e0, 275, 375, 475, 475, 625, 725],   // [0,  0,  51, 151, 251, 251, 401, 501] + 224
         repMult: [0.9, 1.1, 1.3, 1.5, 1.6, 1.6, 1.75, 2.0]
     },
+    {
+        name: "Security",
+        reqRep: [0e0, 8e3, 36e3, 144e3],
+        reqHck: [224, 250, 250, 275],
+        reqStr: [275, 375, 475, 725],
+        reqDef: [275, 375, 475, 725],
+        reqDex: [275, 375, 475, 725],
+        reqAgi: [275, 375, 475, 725],
+        reqCha: [225, 275, 325, 375],
+        repMult: [1, 1.1, 1.25, 1.4],
+    }
 ]
+const securityCompanies = ["ECorp", "MegaCorp", "Bachman & Associates", "Blade Industries", "NWO", "Clarke Incorporated", "OmniTek Incorporated", "Four Sigma", "KuaiGong International"];
 const factions = ["Illuminati", "Daedalus", "The Covenant", "ECorp", "MegaCorp", "Bachman & Associates", "Blade Industries", "NWO", "Clarke Incorporated", "OmniTek Incorporated",
     "Four Sigma", "KuaiGong International", "Fulcrum Secret Technologies", "BitRunners", "The Black Hand", "NiteSec", "Aevum", "Chongqing", "Ishima", "New Tokyo", "Sector-12",
     "Volhaven", "Speakers for the Dead", "The Dark Army", "The Syndicate", "Silhouette", "Tetrads", "Slum Snakes", "Netburners", "Tian Di Hui", "CyberSec"];
@@ -1337,6 +1359,7 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
     // TODO: In some scenarios, the best career path may require combat stats, this hard-codes the optimal path for hack stats
     const itJob = jobs.find(j => j.name == "IT");
     const softwareJob = jobs.find(j => j.name == "Software");
+    const securityJob = jobs.find(j => j.name == "Security");
     if (itJob.reqHck[0] + statModifier > player.skills.hacking) // We don't qualify to work for this company yet if we can't meet IT qualifications (lowest there are)
         return ns.print(`Cannot yet work for "${companyName}": Need Hack ${itJob.reqHck[0] + statModifier} to get hired (current Hack: ${player.skills.hacking});`);
     ns.print(`Going to work for Company "${companyName}" next...`)
@@ -1351,11 +1374,19 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
         const getTier = job => Math.min( // Check all requirements for all job (taking into account modifiers) and find the minimum we meet
             job.reqRep.filter(r => (r * (backdoored ? 0.75 : 1)) <= currentReputation).length,
             job.reqHck.filter(h => (h === 0 ? 0 : h + statModifier) <= player.skills.hacking).length,
+            job.reqStr.filter(s => (s === 0 ? 0 : s + statModifier) <= player.skills.strength).length,
+            job.reqDef.filter(v => (v === 0 ? 0 : v + statModifier) <= player.skills.defense).length,
+            job.reqDex.filter(d => (d === 0 ? 0 : d + statModifier) <= player.skills.dexterity).length,
+            job.reqAgi.filter(a => (a === 0 ? 0 : a + statModifier) <= player.skills.agility).length,
             job.reqCha.filter(c => (c === 0 ? 0 : c + statModifier) <= player.skills.charisma).length) - 1;
         // It's generally best to hop back-and-forth between it and software engineer career paths (rep gain is about the same, but better money from software)
-        const qualifyingItTier = getTier(itJob), qualifyingSoftwareTier = getTier(softwareJob);
-        const bestJobTier = Math.max(qualifyingItTier, qualifyingSoftwareTier); // Go with whatever job promotes us higher
-        const bestRoleName = qualifyingItTier > qualifyingSoftwareTier ? "IT" : "Software"; // If tied for qualifying tier, go for software
+        const qualifyingItTier = getTier(itJob), qualifyingSoftwareTier = getTier(softwareJob), qualifyingSecurityTier = getTier(securityJob);
+        const secBetter = (player.skills.strength + player.skills.defense + player.skills.dexterity + player.skills.agility) / 4 > player.skills.hacking;
+        const secAvailable = securityCompanies.includes(companyName);
+        const bestJobTier = secBetter && secAvailable ? qualifyingSecurityTier : 
+            Math.max(qualifyingItTier, qualifyingSoftwareTier); // Go with whatever job promotes us higher
+        const bestRoleName = secBetter && secAvailable ? "Security" :
+            qualifyingItTier > qualifyingSoftwareTier ? "IT" : "Software"; // If tied for qualifying tier, go for software
         if (currentJobTier < bestJobTier || currentRole != bestRoleName) { // We are ready for a promotion, ask for one!
             if (await tryApplyToCompany(ns, companyName, bestRoleName))
                 log(ns, `Successfully applied to "${companyName}" for a '${bestRoleName}' Job or Promotion`, false, 'success');
@@ -1371,6 +1402,10 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
         const nextJob = nextJobName == "IT" ? itJob : softwareJob;
         const requiredRep = nextJob.reqRep[nextJobTier] * (backdoored ? 0.75 : 1); // Rep requirement is decreased when company server is backdoored
         const requiredHack = nextJob.reqHck[nextJobTier] === 0 ? 0 : nextJob.reqHck[nextJobTier] + statModifier; // Stat modifier only applies to non-zero reqs
+        const requiredStr = nextJob.reqStr[nextJobTier] === 0 ? 0 : nextJob.reqStr[nextJobTier] + statModifier; // Stat modifier only applies to non-zero reqs
+        const requiredDef = nextJob.reqDef[nextJobTier] === 0 ? 0 : nextJob.reqDef[nextJobTier] + statModifier; // Stat modifier only applies to non-zero reqs
+        const requiredDex = nextJob.reqDex[nextJobTier] === 0 ? 0 : nextJob.reqDex[nextJobTier] + statModifier; // Stat modifier only applies to non-zero reqs
+        const requiredAgi = nextJob.reqAgi[nextJobTier] === 0 ? 0 : nextJob.reqAgi[nextJobTier] + statModifier; // Stat modifier only applies to non-zero reqs
         const requiredCha = nextJob.reqCha[nextJobTier] === 0 ? 0 : nextJob.reqCha[nextJobTier] + statModifier; // Stat modifier only applies to non-zero reqs
         let status = `Next promotion ('${nextJobName}' #${nextJobTier}) at Hack:${requiredHack} Cha:${requiredCha} Rep:${requiredRep?.toLocaleString('en')}` +
             (repRequiredForFaction > requiredRep ? '' : `, but we won't need it, because we'll sooner hit ${repRequiredForFaction.toLocaleString('en')} reputation to unlock company faction "${factionName}"!`);
@@ -1479,6 +1514,11 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
             ns.print(`Currently a "${player.jobs[companyName]}" ('${currentRole}' #${currentJobTier}) for "${companyName}" earning ${formatNumberShort(repGainRate)} rep/sec. ` +
                 (hasFocusPenalty && !shouldFocus ? `(after 20% non-focus Penalty)` : '') + `\n` +
                 `${status}\nCurrent player stats are Hack:${player.skills.hacking} ${player.skills.hacking >= (requiredHack || 0) ? '✓' : '✗'} ` +
+                bestRoleName == "Security"  ? `Str:${player.skills.strength} ${player.skills.strength >= (requiredStr || 0) ? '✓' : '✗'} ` +
+                                              `Def:${player.skills.defense} ${player.skills.defense >= (requiredDef || 0) ? '✓' : '✗'} ` +
+                                              `Dex:${player.skills.dexterity} ${player.skills.dexterity >= (requiredDex || 0) ? '✓' : '✗'} ` +
+                                              `Agi:${player.skills.agility} ${player.skills.agility >= (requiredAgi || 0) ? '✓' : '✗'} ` 
+                                            : "" +
                 `Cha:${player.skills.charisma} ${player.skills.charisma >= (requiredCha || 0) ? '✓' : '✗'} ` +
                 `Rep:${Math.round(currentReputation).toLocaleString('en')} ${currentReputation >= (requiredRep || repRequiredForFaction) ? '✓' : `✗ (ETA: ${eta})`}`);
         }
