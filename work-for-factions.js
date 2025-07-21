@@ -343,9 +343,7 @@ async function mainLoop(ns) {
         ns.print(`We're in BN10, which means we should add The Covenant to our priority faction list, so you can purchase sleeves and sleeve memory.`);
     }
     if (currentBitnode == 2 && !playerGang) {
-        let tmpPrio = ["Slums Snakes"];
-        tmpPrio.concat(priorityFactions);
-        priorityFactions = tmpPrio;
+        priorityFactions = ["Slum Snakes"].concat(priorityFactions);
     }
 
     // Strategy 1: Tackle a consolidated list of desired faction order, interleaving simple factions and megacorporations
