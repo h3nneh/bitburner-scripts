@@ -1402,7 +1402,7 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
         const currentJob = player.jobs[companyName];
         const nextJobTier = secBetter && secAvailable ? qualifyingSecurityTier + 1 : currentRole == "IT" ? currentJobTier : currentJobTier + 1;
         const nextJobName = secBetter && secAvailable ? "Security" : currentRole == "IT" || nextJobTier >= itJob.reqRep.length ? "Software" : "IT";
-        const nextJob = secBetter && secAvailable ? "Security" : nextJobName == "IT" ? itJob : softwareJob;
+        const nextJob = secBetter && secAvailable ? securityJob : nextJobName == "IT" ? itJob : softwareJob;
         const requiredRep = nextJob.reqRep[nextJobTier] * (backdoored ? 0.75 : 1); // Rep requirement is decreased when company server is backdoored
         const requiredHack = nextJob.reqHck[nextJobTier] === 0 ? 0 : nextJob.reqHck[nextJobTier] + statModifier; // Stat modifier only applies to non-zero reqs
         const requiredStr = nextJob.reqStr[nextJobTier] === 0 ? 0 : nextJob.reqStr[nextJobTier] + statModifier; // Stat modifier only applies to non-zero reqs
