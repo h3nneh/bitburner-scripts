@@ -1411,7 +1411,7 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
         const requiredAgi = nextJob.reqAgi[nextJobTier] === 0 ? 0 : nextJob.reqAgi[nextJobTier] + statModifier; // Stat modifier only applies to non-zero reqs
         const requiredCha = nextJob.reqCha[nextJobTier] === 0 ? 0 : nextJob.reqCha[nextJobTier] + statModifier; // Stat modifier only applies to non-zero reqs
         let status = `Next promotion ('${nextJobName}' #${nextJobTier}) at Hack:${requiredHack} ` +
-            `Str:${requiredStr} Def:${requiredDef} Dex:${requiredDex} Agi:${requiredAgi}` +
+            `Str:${requiredStr} Def:${requiredDef} Dex:${requiredDex} Agi:${requiredAgi} ` +
             `Cha:${requiredCha} Rep:${requiredRep?.toLocaleString('en')}` +
             (repRequiredForFaction > requiredRep ? '' : `, but we won't need it, because we'll sooner hit ${repRequiredForFaction.toLocaleString('en')} reputation to unlock company faction "${factionName}"!`);
         if (nextJobTier >= nextJob.reqHck.length) // Special case status message if we're at the maximum promotion, but need additional reputation to unlock the company
