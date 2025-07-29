@@ -1400,9 +1400,9 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
             player = await getPlayerInfo(ns); // Update player.jobs info after attempted promotion
         }
         const currentJob = player.jobs[companyName];
-        const nextJobTier = currentRole == "IT" ? currentJobTier : currentJobTier + 1;
-        const nextJobName = currentRole == "IT" || nextJobTier >= itJob.reqRep.length ? "Software" : "IT";
-        const nextJob = nextJobName == "IT" ? itJob : softwareJob;
+        const nextJobTier = secBetter && secAvailable ? qualifyingSecurityTier + 1 : currentRole == "IT" ? currentJobTier : currentJobTier + 1;
+        const nextJobName = secBetter && secAvailable ? "Security" : currentRole == "IT" || nextJobTier >= itJob.reqRep.length ? "Software" : "IT";
+        const nextJob = secBetter && secAvailable ? "Security" : nextJobName == "IT" ? itJob : softwareJob;
         const requiredRep = nextJob.reqRep[nextJobTier] * (backdoored ? 0.75 : 1); // Rep requirement is decreased when company server is backdoored
         const requiredHack = nextJob.reqHck[nextJobTier] === 0 ? 0 : nextJob.reqHck[nextJobTier] + statModifier; // Stat modifier only applies to non-zero reqs
         const requiredStr = nextJob.reqStr[nextJobTier] === 0 ? 0 : nextJob.reqStr[nextJobTier] + statModifier; // Stat modifier only applies to non-zero reqs
@@ -1410,7 +1410,9 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
         const requiredDex = nextJob.reqDex[nextJobTier] === 0 ? 0 : nextJob.reqDex[nextJobTier] + statModifier; // Stat modifier only applies to non-zero reqs
         const requiredAgi = nextJob.reqAgi[nextJobTier] === 0 ? 0 : nextJob.reqAgi[nextJobTier] + statModifier; // Stat modifier only applies to non-zero reqs
         const requiredCha = nextJob.reqCha[nextJobTier] === 0 ? 0 : nextJob.reqCha[nextJobTier] + statModifier; // Stat modifier only applies to non-zero reqs
-        let status = `Next promotion ('${nextJobName}' #${nextJobTier}) at Hack:${requiredHack} Cha:${requiredCha} Rep:${requiredRep?.toLocaleString('en')}` +
+        let status = `Next promotion ('${nextJobName}' #${nextJobTier}) at Hack:${requiredHack} ` +
+            `Str:${requiredStr} Def:${requiredDef} Dex:${requiredDex} Agi:${requiredAgi}` +
+            `Cha:${requiredCha} Rep:${requiredRep?.toLocaleString('en')}` +
             (repRequiredForFaction > requiredRep ? '' : `, but we won't need it, because we'll sooner hit ${repRequiredForFaction.toLocaleString('en')} reputation to unlock company faction "${factionName}"!`);
         if (nextJobTier >= nextJob.reqHck.length) // Special case status message if we're at the maximum promotion, but need additional reputation to unlock the company
             status = `We've reached the maximum promotion level, but are continuing to work until we hit ${repRequiredForFaction.toLocaleString('en')} reputation to unlock company faction "${factionName}."`;
