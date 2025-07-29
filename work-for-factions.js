@@ -47,7 +47,6 @@ const jobs = [ // Job stat requirements for a company with a base stat modifier 
         name: "IT",
         reqRep: [0e0, 7e3, 35e3, 175e3],
         reqHck: [225, 250, 275, 375], // [1, 26, 51, 151] + 224
-        reqHck: [0, 0, 0, 0],
         reqStr: [0, 0, 0, 0],
         reqDef: [0, 0, 0, 0],
         reqDex: [0, 0, 0, 0],
@@ -59,7 +58,6 @@ const jobs = [ // Job stat requirements for a company with a base stat modifier 
         name: "Software",
         reqRep: [0e0, 8e3, 4e4, 2e5, 4e5, 8e5, 16e5, 32e5],
         reqHck: [225, 275, 475, 625, 725, 725, 825, 975],   // [1, 51, 251, 401, 501, 501, 601, 751] + 224
-        reqHck: [0, 0, 0, 0],
         reqStr: [0, 0, 0, 0],
         reqDef: [0, 0, 0, 0],
         reqDex: [0, 0, 0, 0],
@@ -1410,9 +1408,8 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
         const requiredDex = nextJob.reqDex[nextJobTier] === 0 ? 0 : nextJob.reqDex[nextJobTier] + statModifier; // Stat modifier only applies to non-zero reqs
         const requiredAgi = nextJob.reqAgi[nextJobTier] === 0 ? 0 : nextJob.reqAgi[nextJobTier] + statModifier; // Stat modifier only applies to non-zero reqs
         const requiredCha = nextJob.reqCha[nextJobTier] === 0 ? 0 : nextJob.reqCha[nextJobTier] + statModifier; // Stat modifier only applies to non-zero reqs
-        let status = `Next promotion ('${nextJobName}' #${nextJobTier}) at Hack:${requiredHack} ` +
-            `Str:${requiredStr} Def:${requiredDef} Dex:${requiredDex} Agi:${requiredAgi} ` +
-            `Cha:${requiredCha} Rep:${requiredRep?.toLocaleString('en')}` +
+        let secStatStatus = secBetter && secAvailable ? `Str:${requiredStr} Def:${requiredDef} Dex:${requiredDex} Agi:${requiredAgi} ` : '';
+        let status = `Next promotion ('${nextJobName}' #${nextJobTier}) at Hack:${requiredHack} ` + secStatStatus + `Cha:${requiredCha} Rep:${requiredRep?.toLocaleString('en')}` +
             (repRequiredForFaction > requiredRep ? '' : `, but we won't need it, because we'll sooner hit ${repRequiredForFaction.toLocaleString('en')} reputation to unlock company faction "${factionName}"!`);
         if (nextJobTier >= nextJob.reqHck.length) // Special case status message if we're at the maximum promotion, but need additional reputation to unlock the company
             status = `We've reached the maximum promotion level, but are continuing to work until we hit ${repRequiredForFaction.toLocaleString('en')} reputation to unlock company faction "${factionName}."`;
@@ -1516,13 +1513,15 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
             const repGainRate = !isWorking ? 0 : await measureCompanyRepGainRate(ns, companyName);
             const eta = !isWorking ? "?" : formatDuration(1000 * ((requiredRep || repRequiredForFaction) - currentReputation) / repGainRate);
             player = await getPlayerInfo(ns);
-            ns.print(`Currently a "${player.jobs[companyName]}" ('${currentRole}' #${currentJobTier}) for "${companyName}" earning ${formatNumberShort(repGainRate)} rep/sec. ` +
-                (hasFocusPenalty && !shouldFocus ? `(after 20% non-focus Penalty)` : '') + `\n` +
-                `${status}\nCurrent player stats are Hack:${player.skills.hacking} ${player.skills.hacking >= (requiredHack || 0) ? '✓' : '✗'} ` +
+            let curSecStats = secBetter && secAvailable ? 
                 `Str:${player.skills.strength} ${player.skills.strength >= (requiredStr || 0) ? '✓' : '✗'} ` +
                 `Def:${player.skills.defense} ${player.skills.defense >= (requiredDef || 0) ? '✓' : '✗'} ` +
                 `Dex:${player.skills.dexterity} ${player.skills.dexterity >= (requiredDex || 0) ? '✓' : '✗'} ` +
-                `Agi:${player.skills.agility} ${player.skills.agility >= (requiredAgi || 0) ? '✓' : '✗'} ` +
+                `Agi:${player.skills.agility} ${player.skills.agility >= (requiredAgi || 0) ? '✓' : '✗'} ` : '';
+            ns.print(`Currently a "${player.jobs[companyName]}" ('${currentRole}' #${currentJobTier}) for "${companyName}" earning ${formatNumberShort(repGainRate)} rep/sec. ` +
+                (hasFocusPenalty && !shouldFocus ? `(after 20% non-focus Penalty)` : '') + `\n` +
+                `${status}\nCurrent player stats are Hack:${player.skills.hacking} ${player.skills.hacking >= (requiredHack || 0) ? '✓' : '✗'} ` +
+                curSecStats +
                 `Cha:${player.skills.charisma} ${player.skills.charisma >= (requiredCha || 0) ? '✓' : '✗'} ` +
                 `Rep:${Math.round(currentReputation).toLocaleString('en')} ${currentReputation >= (requiredRep || repRequiredForFaction) ? '✓' : `✗ (ETA: ${eta})`}`);
         }
