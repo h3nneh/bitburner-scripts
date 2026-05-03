@@ -40,7 +40,7 @@ export async function main(ns) {
     for (const hostname of nearbyServers) {
       if (!(await serverSolver(ns, hostname))) continue;
 
-      ns.scp([ns.getScriptName(), "worker.js", "promote.js"], hostname);
+      ns.scp([ns.getScriptName(), "worker.js", "promote.js", "helpers.js"], hostname);
       ns.kill(ns.getScriptName(), hostname);
       ns.exec(ns.getScriptName(), hostname, { preventDuplicates: true });
 
