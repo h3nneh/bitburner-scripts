@@ -449,7 +449,7 @@ async function beingInBladeburner(ns) {
     if (!(9 in ownedSourceFiles)) return; // Hacknet not unlocked
     if (options['disable-spending-hashes'])
         return log(ns, `INFO: Not spending hashes on bladeburner (--disable-spending-hashes flag is set)`);
-    const fPath = getFilePath('Management/spend-hacknet-hashes.js');
+    const fPath = getFilePath('spend-hacknet-hashes.js');
     const args = ['--spend-on', 'Exchange_for_Bladeburner_Rank', '--spend-on', 'Exchange_for_Bladeburner_SP', '--liquidate'];
     if (ns.run(fPath, { preventDuplicates: true }, ...args))
         log(ns, `INFO: Launched '${fPath}' to gain Bladeburner Rank and Skill Points more quickly (Can be disabled with --disable-spending-hashes)`)

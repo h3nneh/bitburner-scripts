@@ -145,7 +145,7 @@ async function getHudData(ns, bitNode, dictSourceFiles, options) {
                 val1.push(true, `${formatNumberShort(hashes[0], 3, 1)}/${formatNumberShort(hashes[1], 3, 1)}`,
                     `Current Hashes ${hashes[0].toLocaleString('en')} / Current Hash Capacity ${hashes[1].toLocaleString('en')}`)
                 // Detect and notify the HUD if any scripts are liquidating hashes (selling them as quickly as possible)
-                const spendHashesScript = getFilePath('Management/spend-hacknet-hashes.js');
+                const spendHashesScript = getFilePath('spend-hacknet-hashes.js');
                 const liquidatingHashes = await (/**@returns{Promise<ProcessInfo[]>}*/async () =>
                     await getNsDataThroughFile(ns,
                         `ns.ps('home').filter(p => p.filename == ns.args[0] && (p.args.includes('--liquidate') || p.args.includes('-l')))`,

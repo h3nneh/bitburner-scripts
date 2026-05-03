@@ -50,7 +50,7 @@ export async function main(ns) {
 
     // STEP 1: Liquidate Stocks and (SF9) Hacknet Hashes
     log(ns, 'Sell stocks and hashes...', true, 'info');
-    ns.run(getFilePath('Management/spend-hacknet-hashes.js'), 1, '--liquidate');
+    ns.run(getFilePath('spend-hacknet-hashes.js'), 1, '--liquidate');
 
     // If we do not have tix api access, we cannot automate checking on or selling stocks, so skip this
     const hasTixApiAccess = await getNsDataThroughFile(ns, `ns.stock.hasTixApiAccess()`);
@@ -61,7 +61,7 @@ export async function main(ns) {
         let ownedStocks;
         do {
             log(ns, `INFO: Waiting for ${ownedStocks} owned stocks to be sold...`, false, 'info');
-            pid = ns.run(getFilePath('Management/stockmaster.js'), 1, '--liquidate');
+            pid = ns.run(getFilePath('stockmaster.js'), 1, '--liquidate');
             if (pid) await waitForProcessToComplete(ns, pid, true);
             else log(ns, `ERROR: Failed to run "stockmaster.js --liquidate" to sell ${ownedStocks} owned stocks. Will try again soon...`, false, 'true');
             await ns.sleep(1000);
@@ -106,7 +106,7 @@ export async function main(ns) {
         log(ns, 'INFO: Sending the --ignore-stanek argument to faction-manager.js')
         facmanArgs.push('--ignore-stanek');
     }
-    pid = ns.run(getFilePath('Activities/faction-manager.js'), 1, ...facmanArgs);
+    pid = ns.run(getFilePath('faction-manager.js'), 1, ...facmanArgs);
     await waitForProcessToComplete(ns, pid, true); // Wait for the script to shut down, indicating it is done.
 
     // If we are not slated to install any augmentations, ABORT
@@ -133,14 +133,14 @@ export async function main(ns) {
     // STEP 6: (SF10) Buy whatever sleeve upgrades we can afford
     if (10 in dictSourceFiles) {
         log(ns, 'Try Upgrade Sleeves...', true, 'info');
-        ns.run(getFilePath('Activities/sleeve.js'), 1, '--reserve', '0', '--aug-budget', '1', '--min-aug-batch', '1', '--buy-cooldown', '0', '--disable-training');
+        ns.run(getFilePath('sleeve.js'), 1, '--reserve', '0', '--aug-budget', '1', '--min-aug-batch', '1', '--buy-cooldown', '0', '--disable-training');
         await ns.sleep(500); // Give it time to make its initial purchases. Note that we do not block on the process shutting down - it will keep running.
     }
 
     // STEP 7: (SF2) Buy whatever gang equipment we can afford
     if (2 in dictSourceFiles) {
         log(ns, 'Try Upgrade Gangs...', true, 'info');
-        ns.run(getFilePath('Activities/gangs.js'), 1, '--reserve', '0', '--augmentations-budget', '1', '--equipment-budget', '1');
+        ns.run(getFilePath('gangs.js'), 1, '--reserve', '0', '--augmentations-budget', '1', '--equipment-budget', '1');
         await ns.sleep(500); // Give it time to make its initial purchases. Note that we do not block on the process shutting down - it will keep running.
     }
 
@@ -185,7 +185,7 @@ export async function main(ns) {
     // STEP 4 REDUX: If somehow we have money left over and can afford some junk augs that weren't on our desired list, grab them too
     log(ns, 'Seeing if we can afford any other augmentations...', true, 'info');
     facmanArgs.push('--stat-desired', '_'); // Means buy any aug with any stats
-    pid = ns.run(getFilePath('Activities/faction-manager.js'), 1, ...facmanArgs);
+    pid = ns.run(getFilePath('faction-manager.js'), 1, ...facmanArgs);
     await waitForProcessToComplete(ns, pid, true); // Wait for the script to shut down, indicating it is done.
 
     // Clean up our temp folder - it's good to do this once in a while to reduce the save footprint
@@ -198,7 +198,7 @@ export async function main(ns) {
         await ns.sleep(1000); // Pause for effect?
         const resetScript = options['on-reset-script'] ??
             // Default script (if none is specified) is stanek.js if we have it (which in turn will spawn daemon.js when done)
-            (purchasedAugmentations.includes(`Stanek's Gift - Genesis`) ? getFilePath('Activities/stanek.js') : getFilePath('daemon.js'));
+            (purchasedAugmentations.includes(`Stanek's Gift - Genesis`) ? getFilePath('stanek.js') : getFilePath('daemon.js'));
         if (noAugsToInstall)
             await runCommand(ns, `ns.singularity.softReset(ns.args[0])`, null, [resetScript]);
         else
