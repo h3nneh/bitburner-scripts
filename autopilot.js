@@ -18,6 +18,7 @@ const argsSchema = [ // The set of all command line arguments
     ['high-hack-threshold', 8000], // Once hack level reaches this, we start daemon in high-performance hacking mode
     ['enable-bladeburner', null], // (Deprecated) Bladeburner is now always enabled if it's available. Use '--disable-bladeburner' to explicitly turn off
     ['disable-bladeburner', false], // This will instruct daemon.js not to run the bladeburner.js, even if bladeburner is available.
+    ['disable-darknet', false], // Set to true to disable running darknet.ts automatically
     ['wait-for-4s-threshold', 0.9], // Set to 0 to not reset until we have 4S. If money is above this ratio of the 4S Tix API cost, don't reset until we buy it.
     ['disable-wait-for-4s', false], // If true, will doesn't wait for the 4S Tix API to be acquired under any circumstantes
     ['disable-rush-gangs', false], // Set to true to disable focusing work-for-faction on Karma until gangs are unlocked
@@ -703,6 +704,10 @@ export async function main(ns) {
             if (playerInGang && !findScript('gangs.js'))
                 launchScriptHelper(ns, 'gangs.js');
         }
+
+        // Launch darknet.ts to explore and crack dnet servers
+        if (!options['disable-darknet'] && !findScript('darknet.ts'))
+            launchScriptHelper(ns, 'darknet.ts');
 
         // Launch work-for-factions if it isn't already running (rules for maybe killing unproductive instances are above)
         // Note: We delay launching our own 'work-for-factions.js' until daemon has warmed up, so we don't steal it's "kickstartHackXp" study focus
