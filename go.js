@@ -50,6 +50,10 @@ export async function main(ns) {
     let turn = 0;
     let START = performance.now();
 
+    let searchDeadline = 0;
+    let searchAborted = false;
+    let nodesSearched = 0;
+
     // Per-turn state from ns.go
     let board = (/**@returns{string[]}*/() => undefined)();
     let contested = (/**@returns{string[]}*/() => undefined)();
@@ -485,9 +489,6 @@ export async function main(ns) {
     // ============================================================
     // NEGAMAX + ALPHA-BETA + ITERATIVE DEEPENING + QUIESCENCE
     // ============================================================
-    let searchDeadline = 0;
-    let searchAborted = false;
-    let nodesSearched = 0;
 
     function negamax(b, depth, alpha, beta, color, qExtensionsLeft) {
         if ((nodesSearched & 1023) === 0 && performance.now() > searchDeadline) {
