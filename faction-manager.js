@@ -164,7 +164,7 @@ export async function main(ns) {
             ((Date.now() - resetInfo.lastAugReset) < 20 * 60 * 1000); // If we've been in the bitnode for less than 20 minutes, autopilot is configured to "quick-install", any aug is worthwhile in this time window 
         desiredStatsFilters = willTakeAnyAug ? ['*'] : // Take any aug if one of the above criteria is met
             bitNode == 8 ? ['hacking_level', 'hacking_exp'] : // In BN8, we only want to install if we will be boosting our hack level (to unlock Daedalus). We don't need rep as much, since it can be purchased immediately.
-                ['hacking', 'faction_rep', 'company_rep', 'charisma', 'hacknet', 'crime_money']; // Otherwise get hacking + rep boosting, etc. for unlocking augs more quickly
+                ['hacking', 'faction_rep', 'company_rep', 'charisma', 'hacknet']; // Otherwise get hacking + rep boosting, etc. for unlocking augs more quickly
     }
     log(ns, 'Desired stats filter: ' + JSON.stringify(desiredStatsFilters));
 
@@ -576,7 +576,7 @@ function sortAugs(ns, augs = []) {
     }
     // TODO: Logic below is **almost** working, except that the "batch detection" is flawed - it does not detect when multiple separate
     //       "trees" of dependencies with a common root are side-by-side (e.g. "Embedded Netburner Module" tree). Until fixed, we cannot bubble.
-    return augs;
+    //return augs;
     // Since we are no longer most-expensive to least-expensive, the "ideal purchase order" is more complicated.
     // So now see if moving each chunk of prereqs down a slot reduces the overall price.
     let initialCost = getTotalCost(augs);
@@ -585,6 +585,7 @@ function sortAugs(ns, augs = []) {
         let batchLengh = 1; // Look for a "batch" of prerequisites, evidenced by augs above this one being cheaper instead of more expensive
         while (i - batchLengh >= 0 && augs[i].price > augs[i - batchLengh].price) batchLengh++;
         if (batchLengh == 1) continue; // Not the start of a batch of prerequisites
+        if (augs[i].prereqs.includes(augs[i - batchLengh])) continue;
         //log(ns, `Detected a batch of length ${batchLengh} from ${augs[i - batchLengh + 1].name} to ${augs[i].name}`);
         let moved = 0, bestCost = initialCost;
         while (i + moved + 1 < augs.length) { // See if promoting augs from below the batch to above the batch reduces the overall cost

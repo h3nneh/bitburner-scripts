@@ -47,6 +47,10 @@ const jobs = [ // Job stat requirements for a company with a base stat modifier 
         name: "IT",
         reqRep: [0e0, 7e3, 35e3, 175e3],
         reqHck: [225, 250, 275, 375], // [1, 26, 51, 151] + 224
+        reqStr: [0, 0, 0, 0],
+        reqDef: [0, 0, 0, 0],
+        reqDex: [0, 0, 0, 0],
+        reqAgi: [0, 0, 0, 0],
         reqCha: [0e0, 0e0, 275, 300], // [0,  0, 51,  76] + 224
         repMult: [0.9, 1.1, 1.3, 1.4]
     },
@@ -54,10 +58,26 @@ const jobs = [ // Job stat requirements for a company with a base stat modifier 
         name: "Software",
         reqRep: [0e0, 8e3, 4e4, 2e5, 4e5, 8e5, 16e5, 32e5],
         reqHck: [225, 275, 475, 625, 725, 725, 825, 975],   // [1, 51, 251, 401, 501, 501, 601, 751] + 224
+        reqStr: [0, 0, 0, 0],
+        reqDef: [0, 0, 0, 0],
+        reqDex: [0, 0, 0, 0],
+        reqAgi: [0, 0, 0, 0],
         reqCha: [0e0, 0e0, 275, 375, 475, 475, 625, 725],   // [0,  0,  51, 151, 251, 251, 401, 501] + 224
         repMult: [0.9, 1.1, 1.3, 1.5, 1.6, 1.6, 1.75, 2.0]
     },
+    {
+        name: "Security",
+        reqRep: [0e0, 8e3, 36e3, 144e3],
+        reqHck: [224, 250, 250, 275],
+        reqStr: [275, 375, 475, 725],
+        reqDef: [275, 375, 475, 725],
+        reqDex: [275, 375, 475, 725],
+        reqAgi: [275, 375, 475, 725],
+        reqCha: [225, 275, 325, 375],
+        repMult: [1, 1.1, 1.25, 1.4],
+    }
 ]
+const securityCompanies = ["ECorp", "MegaCorp", "Bachman & Associates", "Blade Industries", "NWO", "Clarke Incorporated", "OmniTek Incorporated", "Four Sigma", "KuaiGong International"];
 const factions = ["Illuminati", "Daedalus", "The Covenant", "ECorp", "MegaCorp", "Bachman & Associates", "Blade Industries", "NWO", "Clarke Incorporated", "OmniTek Incorporated",
     "Four Sigma", "KuaiGong International", "Fulcrum Secret Technologies", "BitRunners", "The Black Hand", "NiteSec", "Aevum", "Chongqing", "Ishima", "New Tokyo", "Sector-12",
     "Volhaven", "Speakers for the Dead", "The Dark Army", "The Syndicate", "Silhouette", "Tetrads", "Slum Snakes", "Netburners", "Tian Di Hui", "CyberSec"];
@@ -106,7 +126,7 @@ let shouldFocus; // Whether we should focus on work or let it be backgrounded (b
 // And a bunch of globals because managing state and encapsulation is hard.
 let hasFocusPenalty, hasSimulacrum, favorToDonate, fulcrumHackReq, notifiedAboutDaedalus, playerInBladeburner, wasGrafting, currentBitnode;
 let dictSourceFiles, dictFactionFavors, playerGang, mainLoopStart, scope, numJoinedFactions, lastTravel, crimeCount;
-let firstFactions, skipFactions, completedFactions, softCompletedFactions, mostExpensiveAugByFaction, mostExpensiveDesiredAugByFaction;
+let firstFactions, skipFactions, completedFactions, softCompletedFactions, mostExpensiveAugByFaction, mostExpensiveDesiredAugByFaction, medianRepDesiredAugByFaction;
 let bitNodeMults = (/**@returns{BitNodeMultipliers}*/() => undefined)(); // Trick to get strong typing in mono
 
 export function autocomplete(data, args) {
@@ -123,6 +143,7 @@ const breakToMainLoop = () => Date.now() > mainLoopStart + checkForNewPriorities
 /** @param {NS} ns */
 export async function main(ns) {
     const runOptions = getConfiguration(ns, argsSchema);
+    const resetInfo = await getResetInfoRd(ns);
     if (!runOptions || await instanceCount(ns) > 1) return; // Prevent multiple instances of this script from being started, even with different args.
     options = runOptions; // We don't set the global "options" until we're sure this is the only running instance
     disableLogs(ns, ['sleep']);
@@ -137,7 +158,8 @@ export async function main(ns) {
     // Default desired-stats if none were specified
     if (options['desired-stats'].length == 0)
         options['desired-stats'] = options['crime-focus'] ? ['str', 'def', 'dex', 'agi', 'faction_rep', 'hacknet', 'crime'] :
-            ['hacking', 'faction_rep', 'company_rep', 'charisma', 'hacknet', 'crime_money']
+            resetInfo.currentBitnode == 8 ? ['hacking', 'hacking_exp'] :
+            ['hacking', 'faction_rep', 'company_rep', 'charisma', 'hacknet']
     // Default desired-augs if none were specified
     if (options['desired-augs'].length == 0)
         options['desired-augs'] = default_desired_augs;
@@ -222,9 +244,17 @@ async function loadStartupData(ns) {
         dictFactionAugs[f].filter(aug => !ownedAugmentations.includes(aug) && (
             options['desired-augs'].includes(aug) ||
             Object.keys(dictAugStats[aug]).length == 0 || options['desired-stats'].length == 0 ||
-            Object.keys(dictAugStats[aug]).some(key => options['desired-stats'].some(stat => key.includes(stat)))
+            Object.keys(dictAugStats[aug]).some(key => options['desired-stats'].some(stat => key.includes(stat) && dictAugStats[aug][key] > 1))
         )).reduce((max, aug) => Math.max(max, dictAugRepReqs[aug]), -1)]));
     //ns.print("Most expensive desired aug by faction: " + JSON.stringify(mostExpensiveDesiredAugByFaction));
+
+    medianRepDesiredAugByFaction = Object.fromEntries(allKnownFactions.map(f => [f,
+        medianRep(dictFactionAugs[f].filter(aug => !ownedAugmentations.includes(aug) && (
+            options['desired-augs'].includes(aug) ||
+            Object.keys(dictAugStats[aug]).length == 0 || options['desired-stats'].length == 0 ||
+            Object.keys(dictAugStats[aug]).some(key => options['desired-stats'].some(stat => key.includes(stat) && dictAugStats[aug][key] > 1))
+        )), dictAugRepReqs)
+    ]));
 
     // Filter out factions who have no augs (or tentatively filter those with no desirable augs) unless otherwise configured. The exception is
     // we will always filter the most-precluding city factions, (but not ["Chongqing", "New Tokyo", "Ishima"], which can all be joined simultaneously)
@@ -286,7 +316,7 @@ async function mainLoop(ns) {
                     await earnFactionInvite(ns, factionName);
             }
         }
-    }
+    }        
     // If something outside of this script is stealing player focus, decide whether to allow it
     if (await isValidInterruption(ns))
         return (await ns.sleep(loopSleepInterval));
@@ -309,6 +339,9 @@ async function mainLoop(ns) {
     if (currentBitnode == 10 && !priorityFactions.includes("The Covenant")) {
         priorityFactions.push("The Covenant");
         ns.print(`We're in BN10, which means we should add The Covenant to our priority faction list, so you can purchase sleeves and sleeve memory.`);
+    }
+    if (currentBitnode == 2 && !playerGang) {
+        priorityFactions = ["Slum Snakes"].concat(priorityFactions);
     }
 
     // Strategy 1: Tackle a consolidated list of desired faction order, interleaving simple factions and megacorporations
@@ -416,8 +449,8 @@ const title = s => s && s[0].toUpperCase() + s.slice(1); // Annoyingly bitnode m
 /** Return the product of all multipliers affecting training the specified stat.
  * @param {Player} player @param {string} stat @param {number} trainingBitnodeMult */
 function heuristic(player, stat, trainingBitnodeMult) {
-    return Math.sqrt(player.mults[stat] * bitNodeMults[`${title(stat)}LevelMultiplier`] *
-        /* */ player.mults[`${stat}_exp`] * trainingBitnodeMult);
+    return player.mults[stat] * bitNodeMults[`${title(stat)}LevelMultiplier`] *
+        /* */ (1 + Math.log(1 + player.mults[`${stat}_exp`])) * (1 + Math.log(1 + trainingBitnodeMult));
 }
 /** A heuristic for how long it'll take to train the specified stat via Crime. @param {Player} player @param {string} stat @param */
 const crimeHeuristic = (player, stat) => heuristic(player, stat, bitNodeMults.CrimeExpGain); // When training with crime
@@ -439,7 +472,7 @@ async function earnFactionInvite(ns, factionName) {
     if (["Aevum", "Sector-12"].includes(factionName) && (precludingFaction = ["Chongqing", "New Tokyo", "Ishima", "Volhaven"].find(f => joinedFactions.includes(f))) ||
         ["Chongqing", "New Tokyo", "Ishima"].includes(factionName) && (precludingFaction = ["Aevum", "Sector-12", "Volhaven"].find(f => joinedFactions.includes(f))) ||
         ["Volhaven"].includes(factionName) && (precludingFaction = ["Aevum", "Sector-12", "Chongqing", "New Tokyo", "Ishima"].find(f => joinedFactions.includes(f))))
-        return ns.print(`${reasonPrefix} precluding faction "${precludingFaction}"" has been joined.`);
+        return ns.print(`${reasonPrefix} precluding faction "${precludingFaction}" has been joined.`);
     let requirement;
     // See if we can take action to earn an invite for the next faction under consideration
     let workedForInvite = false;
@@ -460,6 +493,7 @@ async function earnFactionInvite(ns, factionName) {
     let deficientStats = !requirement ? [] : physicalStats.map(stat => ({ stat, value: player.skills[stat] })).filter(stat => stat.value < requirement);
     const hackHeuristic = classHeuristic(player, 'hacking');
     const crimeHeuristics = Object.fromEntries(physicalStats.map(s => [s, crimeHeuristic(player, s)]));
+    const gymHeuristics = Object.fromEntries(physicalStats.map(s => [s, classHeuristic(player, s)]));
     // Hash for special-case factions (just 'Daedalus' for now) requiring *either* hacking *or* combat
     if (reqHackingOrCombat.includes(factionName) && deficientStats.length > 0 && (
         // Compare roughly how long it will take to train up our hacking stat
@@ -470,18 +504,48 @@ async function earnFactionInvite(ns, factionName) {
     else if (deficientStats.length > 0) {
         ns.print(`${reasonPrefix} you have insufficient combat stats. Need: ${requirement} of each, Have ` +
             physicalStats.map(s => `${s.slice(0, 3)}: ${player.skills[s]}`).join(", "));
+
         const em = requirement / options['training-stat-per-multi-threshold'];
-        // Hack: Create a rough heuristic suggesting how much multi we need to train physical stats in a reasonable amount of time.
-        // TODO: Be smarter (time-based decision), and also consider whether training physical stats via GYM might be faster
-        if (deficientStats.some(s => crimeHeuristics[s.stat] < em))
-            return ns.print("Some mults * exp_mults * bitnode mults appear to be too low to increase stats in a reasonable amount of time. " +
+        let exp_requirements = Object.fromEntries(physicalStats.map(s => [s, requirement * requirement]));
+        let hasFormulas = ns.fileExists("Formulas.exe", "home");
+        if (hasFormulas) {
+          try {
+            exp_requirements = Object.fromEntries(physicalStats.map(s => [s, ns.formulas.skills.calculateExp(requirement, player.mults[s] * bitNodeMults[`${title(s)}LevelMultiplier`]) - ns.formulas.skills.calculateExp(player.skills[s], player.mults[s] * bitNodeMults[`${title(s)}LevelMultiplier`])]));
+          }
+          catch {}
+        }
+        if (deficientStats.some(s => crimeHeuristics[s.stat] < em && gymHeuristics[s.stat] < em))
+          return ns.print(`Some mults * exp_mults * bitnode mults appear to be too low to increase stats in a reasonable amount of time. ` +
                 `You can control this with --training-stat-per-multi-threshold. Current sqrt(mult*exp_mult*bn_mult*bn_exp_mult) ` +
                 `should be ~${formatNumberShort(em, 2)}, have ` + deficientStats.map(s => s.stat).map(s => `${s.slice(0, 3)}: sqrt(` +
                     `${formatNumberShort(player.mults[s])}*${formatNumberShort(player.mults[`${s}_exp`])}*` +
                     `${formatNumberShort(bitNodeMults[`${title(s)}LevelMultiplier`])}*` +
-                    `${formatNumberShort(bitNodeMults.CrimeExpGain)})=${formatNumberShort(crimeHeuristics[s])}`).join(", "));
-        doCrime = true; // TODO: There could be more efficient ways to gain combat stats than homicide, although at least this serves future crime factions
+                    `${formatNumberShort(bitNodeMults.ClassGymExpGain)})=${formatNumberShort(gymHeuristics[s])}g/${formatNumberShort(crimeHeuristics[s])}c`).join(", "));
+        else if (deficientStats.reduce((sum, s) => sum + (exp_requirements[s.stat] / (ns.formulas.work.gymGains(player, s.stat.substring(0, 3), "Powerhouse Gym")[`${s.stat.substring(0, 3)}Exp`] * 5)), 0) > 30 * 60)
+          return ns.print(`Gym takes too long. (> 30 min for all stats)`);
+        else if (!playerGang && bitNodeMults.CrimeExpGain >= bitNodeMults.ClassGymExpGain &&
+          deficientStats.every(s => exp_requirements[s.stat] / (crimeHeuristics[s.stat] * 3 / 4) < 5 * 60) &&
+          deficientStats.length > 2) {
+          doCrime = true;
+        } else {
+          while (!breakToMainLoop() && !workedForInvite && player.money >= 5e6) {
+            await gymWrapper(ns, "strength", requirement);
+            await gymWrapper(ns, "defense", requirement);
+            await gymWrapper(ns, "dexterity", requirement);
+            await gymWrapper(ns, "agility", requirement);
+
+            player = await getPlayerInfo(ns);
+            workedForInvite = 
+                player.skills.strength >= requirement
+            &&  player.skills.defense >= requirement
+            &&  player.skills.dexterity >= requirement
+            &&  player.skills.agility >= requirement;
+          }
+          
+        }
     }
+    if (breakToMainLoop()) return false;
+    
     if (doCrime && options['no-crime'])
         return ns.print(`${reasonPrefix} Doing crime to meet faction requirements is disabled. (--no-crime or --no-focus)`);
     if (doCrime)
@@ -502,6 +566,14 @@ async function earnFactionInvite(ns, factionName) {
         !(reqHackingOrCombat.includes(factionName) && workedForInvite)) {
         ns.print(`${reasonPrefix} you have insufficient hack level. Need: ${requirement}, Have: ${player.skills.hacking}`);
         const em = requirement / options['training-stat-per-multi-threshold'];
+        let exp_requirement = 0;
+        let hasFormulas = ns.fileExists("Formulas.exe", "home");
+        if (hasFormulas) {
+          try {
+            exp_requirement = ns.formulas.skills.calculateExp(requirement, player.mults.hacking * bitNodeMults.HackingLevelMultiplier) - ns.formulas.skills.calculateExp(player.skills.hacking, player.mults.hacking * bitNodeMults.HackingLevelMultiplier);
+          }
+          catch {}
+        }
         if (options['no-studying'])
             return ns.print(`--no-studying is set, nothing we can do to improve hack level.`);
         if (hackHeuristic < em)
@@ -510,6 +582,12 @@ async function earnFactionInvite(ns, factionName) {
                 `(${formatNumberShort(bitNodeMults.HackingLevelMultiplier)}) / (${formatNumberShort(bitNodeMults.ClassGymExpGain)}) ` +
                 `are probably too low to increase hack from ${player.skills.hacking} to ${requirement} in a reasonable amount of time ` +
                 `(${hackHeuristic} < ${formatNumberShort(em, 2)} - configure with --training-stat-per-multi-threshold)`);
+        else if (exp_requirement / 
+                  (ns.formulas.work.universityGains(
+                    player, 
+                    player.money < options['pay-for-studies-threshold'] ? "Study Computer Science" : "Algorithms", 
+                    player.money < options['pay-for-studies-threshold'] ? uniByCity[player.city] : uniByCity["Volhaven"]).hackExp * 5) > 15 * 60)
+          return ns.print(`Study hacking takes too long. (> 15 min)`);
         let studying = false;
         if (player.money > options['pay-for-studies-threshold']) { // If we have sufficient money, pay for the best studies
             if (player.city != "Volhaven") await goToCity(ns, "Volhaven");
@@ -714,10 +792,121 @@ async function monitorStudies(ns, stat, requirement) {
             log(ns, `SUCCESS: Achieved ${stat} level ${player.skills[stat]} >= ${requirement} while studying`, false, 'info');
             return true;
         }
+        let eta_milliseconds = 0;
+        let hasFormulas = ns.fileExists("Formulas.exe", "home");
+        if (hasFormulas) {
+          try {
+            switch (stat) {
+              case "hacking" : eta_milliseconds = 
+                1000 * (ns.formulas.skills.calculateExp(requirement, player.mults.hacking * bitNodeMults.HackingLevelMultiplier) - ns.formulas.skills.calculateExp(player.skills[stat], player.mults.hacking * bitNodeMults.HackingLevelMultiplier)) 
+                / (ns.formulas.work.universityGains(player, currentWork.classType, currentWork.location).hackExp * 5);
+                break;
+              
+              case "charisma" : eta_milliseconds = 
+                1000 * (ns.formulas.skills.calculateExp(requirement, player.mults.charisma * bitNodeMults.CharismaLevelMultiplier) - ns.formulas.skills.calculateExp(player.skills[stat], player.mults.charisma * bitNodeMults.CharismaLevelMultiplier)) 
+                / (ns.formulas.work.universityGains(player, currentWork.classType, currentWork.location).chaExp * 5);
+                break;
+            }
+          } catch { }
+        }
         if ((Date.now() - lastStatusUpdateTime) > statusUpdateInterval) {
             lastStatusUpdateTime = Date.now();
-            log(ns, `Studying "${currentWork.classType}" at ${currentWork.location} until ${stat} reaches ${requirement}. ` +
-                `Currently at ${player.skills[stat]}...`, false, 'info'); // TODO: Compute an ETA, and configure training threshold based on ETA
+            log(ns, `Studying '${currentWork.classType}' at ${currentWork.location} until ${stat} reaches ${requirement}. ` +
+                `Currently at ${player.skills[stat]}...` + `${eta_milliseconds == 0 ? "" : ` (ETA: ${formatDuration(eta_milliseconds)})`}`, false, 'info');
+        }
+        await ns.sleep(loopSleepInterval);
+    }
+}
+
+const gymByCity = Object.fromEntries([["Aevum", "Snap Fitness Gym"], ["Sector-12", "Powerhouse Gym"], ["Volhaven", "Millenium Fitness Gym"]]);
+
+async function gymWrapper(ns, course, requirement) {
+  const player = await getPlayerInfo(ns);
+  if (player.mults[course.substring(0, 3)] >= requirement) return true;
+  let gyming = false;
+  if (player.money > options['pay-for-studies-threshold']) { // If we have sufficient money, pay for the best studies
+    if (player.city != "Sector-12") await goToCity(ns, "Sector-12");
+      gyming = await doGym(ns, false, course);
+  } else if (uniByCity[player.city]) // Otherwise only go to free gym if our city has a gym
+    gyming = await doGym(ns, false, course);
+  else
+    return ns.print(`You have insufficient money (${formatMoney(player.money)} < --pay-for-studies-threshold ` +
+      `${formatMoney(options['pay-for-studies-threshold'])}) to travel or pay for gym.`);
+  if (gyming)
+    return await monitorGym(ns, course, requirement);
+}
+
+async function doGym(ns, focus, course, gym = null) {
+    if (options['no-studying']) {
+        log(ns, `WARNING: Could not gym '${course}' because --no-studying is set.`, false, 'warning');
+        return;
+    }
+    const playerCity = (await getPlayerInfo(ns)).city;
+    if (!gym) { // Auto-detect the gym in our city
+        gym = gymByCity[playerCity];
+        if (!gym) {
+            log(ns, `WARNING: Could not gym '${course}' because we are in city '${playerCity}' without a gym.`, false, 'warning');
+            return;
+        }
+    }
+    if (await getNsDataThroughFile(ns, `ns.singularity.gymWorkout(ns.args[0], ns.args[1], ns.args[2])`, null, [gym, course, focus])) {
+        log(ns, `Started gyming '${course}' at '${gym}'`, false, 'success');
+        return true;
+    }
+    log(ns, `ERROR: For some reason, failed to gym '${course}' at gym '${gym}' (Not in correct city? Player is in '${playerCity}')`, false, 'error');
+    return false;
+}
+
+/** @param {NS} ns
+ * Helper to wait for gym to be complete */
+async function monitorGym(ns, stat, requirement) {
+    let lastStatusUpdateTime = 0;
+    const initialWork = await getCurrentWorkInfo(ns);
+    while (!breakToMainLoop()) {
+        const currentWork = await getCurrentWorkInfo(ns);
+        if (!(currentWork.classType) || currentWork.classType != initialWork.classType) {
+            log(ns, `WARNING: Something interrupted our gym.` +
+                `\nWAS: ${JSON.stringify(initialWork)}\nNOW: ${JSON.stringify(currentWork)}`, false, 'warning');
+            return;
+        }
+        const player = await getPlayerInfo(ns);
+        if (player.skills[stat] >= requirement) {
+            log(ns, `SUCCESS: Achieved ${stat} level ${player.skills[stat]} >= ${requirement} while gyming`, false, 'info');
+            return true;
+        }
+        let eta_milliseconds = 0;
+        let hasFormulas = ns.fileExists("Formulas.exe", "home");;
+        if (hasFormulas) {
+          try {
+            switch (stat) {
+              case "strength" : eta_milliseconds = 
+                1000 * (ns.formulas.skills.calculateExp(requirement, player.mults.strength * bitNodeMults.StrengthLevelMultiplier) - ns.formulas.skills.calculateExp(player.skills[stat], player.mults.strength * bitNodeMults.StrengthLevelMultiplier)) 
+                / (ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).strExp * 5);
+                break;
+              
+              case "defense" : eta_milliseconds = 
+                1000 * (ns.formulas.skills.calculateExp(requirement, player.mults.defense * bitNodeMults.DefenseLevelMultiplier) - ns.formulas.skills.calculateExp(player.skills[stat], player.mults.defense * bitNodeMults.DefenseLevelMultiplier)) 
+                / (ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).defExp * 5);
+                break;
+
+              case "dexterity" : eta_milliseconds = 
+                1000 * (ns.formulas.skills.calculateExp(requirement, player.mults.dexterity * bitNodeMults.DexterityLevelMultiplier) - ns.formulas.skills.calculateExp(player.skills[stat], player.mults.dexterity * bitNodeMults.DexterityLevelMultiplier)) 
+                / (ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).dexExp * 5);
+                break;
+
+              case "agility" : eta_milliseconds = 
+                1000 * (ns.formulas.skills.calculateExp(requirement, player.mults.agility * bitNodeMults.AgilityLevelMultiplier) - ns.formulas.skills.calculateExp(player.skills[stat], player.mults.agility * bitNodeMults.AgilityLevelMultiplier)) 
+                / (ns.formulas.work.gymGains(player, currentWork.classType, currentWork.location).agiExp * 5);
+                break;
+            }
+              
+          } catch { }
+        }
+        
+        if ((Date.now() - lastStatusUpdateTime) > statusUpdateInterval) {
+            lastStatusUpdateTime = Date.now();
+            log(ns, `Gyming '${currentWork.classType}' at ${currentWork.location} until ${stat} reaches ${requirement}. ` +
+                `Currently at ${player.skills[stat]}...` + `${eta_milliseconds == 0 ? "" : ` (ETA: ${formatDuration(eta_milliseconds)})`}`, false, 'info');
         }
         await ns.sleep(loopSleepInterval);
     }
@@ -926,6 +1115,19 @@ export async function workForSingleFaction(ns, factionName, forceUnlockDonations
     }
 
     let currentReputation = await getFactionReputation(ns, factionName);
+    let player = await getPlayerInfo(ns);
+    let repGainRate = 0;
+    let hasFormulas = ns.fileExists("Formulas.exe", "home");
+    if (hasFormulas) {
+      try { 
+        repGainRate = Math.max(
+          [ns.formulas.work.factionGains(player, ns.enums.FactionWorkType.hacking, startingFavor).reputation * 5],
+          [ns.formulas.work.factionGains(player, ns.enums.FactionWorkType.security, startingFavor).reputation * 5],
+          [ns.formulas.work.factionGains(player, ns.enums.FactionWorkType.field, startingFavor).reputation * 5]
+        );
+      }
+      catch {}
+    }
     // If the best faction aug is within 10% of our current rep, grind all the way to it so we can get it immediately, regardless of our current rep target
     if (forceBestAug || highestRepAug <= 1.1 * Math.max(currentReputation, factionRepRequired))
         factionRepRequired = Math.max(highestRepAug, factionRepRequired);
@@ -933,7 +1135,9 @@ export async function workForSingleFaction(ns, factionName, forceUnlockDonations
     if (currentReputation >= factionRepRequired)
         return ns.print(`Faction "${factionName}" required rep of ${Math.round(factionRepRequired).toLocaleString('en')} has already been attained ` +
             `(Current rep: ${Math.round(currentReputation).toLocaleString('en')}). Skipping working for faction...`)
-
+    // TODO: check for better implementation
+    //if ((medianRepDesiredAugByFaction[factionName] - currentReputation) / repGainRate > 1.5 * 60 * 60 && scope <= 1)
+        //return ns.print(`Skipping working for faction as gaining half the augs from '${factionName}' takes longer than 90 mins.`);
     ns.print(`Faction "${factionName}" Highest Aug Req: ${highestRepAug?.toLocaleString('en')}, Current Favor (` +
         `${startingFavor?.toFixed(2)}/${favorToDonate?.toFixed(2)}) Req: ${Math.round(favorRepRequired).toLocaleString('en')}`);
     if (options['invites-only'])
@@ -982,7 +1186,7 @@ export async function workForSingleFaction(ns, factionName, forceUnlockDonations
             lastFactionWorkStatus = status;
             lastStatusUpdateTime = Date.now();
             // Measure approximately how quickly we're gaining reputation to give a rough ETA
-            const repGainRate = await measureFactionRepGainRate(ns, factionName);
+            repGainRate = await measureFactionRepGainRate(ns, factionName);
             const eta_milliseconds = 1000 * (factionRepRequired - currentReputation) / repGainRate;
             ns.print(`${status} Currently at ${Math.round(currentReputation).toLocaleString('en')}, ` +
                 `earning ${formatNumberShort(repGainRate)} rep/sec. ` +
@@ -1156,6 +1360,7 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
     // TODO: In some scenarios, the best career path may require combat stats, this hard-codes the optimal path for hack stats
     const itJob = jobs.find(j => j.name == "IT");
     const softwareJob = jobs.find(j => j.name == "Software");
+    const securityJob = jobs.find(j => j.name == "Security");
     if (itJob.reqHck[0] + statModifier > player.skills.hacking) // We don't qualify to work for this company yet if we can't meet IT qualifications (lowest there are)
         return ns.print(`Cannot yet work for "${companyName}": Need Hack ${itJob.reqHck[0] + statModifier} to get hired (current Hack: ${player.skills.hacking});`);
     ns.print(`Going to work for Company "${companyName}" next...`)
@@ -1170,11 +1375,19 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
         const getTier = job => Math.min( // Check all requirements for all job (taking into account modifiers) and find the minimum we meet
             job.reqRep.filter(r => (r * (backdoored ? 0.75 : 1)) <= currentReputation).length,
             job.reqHck.filter(h => (h === 0 ? 0 : h + statModifier) <= player.skills.hacking).length,
+            job.reqStr.filter(s => (s === 0 ? 0 : s + statModifier) <= player.skills.strength).length,
+            job.reqDef.filter(v => (v === 0 ? 0 : v + statModifier) <= player.skills.defense).length,
+            job.reqDex.filter(d => (d === 0 ? 0 : d + statModifier) <= player.skills.dexterity).length,
+            job.reqAgi.filter(a => (a === 0 ? 0 : a + statModifier) <= player.skills.agility).length,
             job.reqCha.filter(c => (c === 0 ? 0 : c + statModifier) <= player.skills.charisma).length) - 1;
         // It's generally best to hop back-and-forth between it and software engineer career paths (rep gain is about the same, but better money from software)
-        const qualifyingItTier = getTier(itJob), qualifyingSoftwareTier = getTier(softwareJob);
-        const bestJobTier = Math.max(qualifyingItTier, qualifyingSoftwareTier); // Go with whatever job promotes us higher
-        const bestRoleName = qualifyingItTier > qualifyingSoftwareTier ? "IT" : "Software"; // If tied for qualifying tier, go for software
+        const qualifyingItTier = getTier(itJob), qualifyingSoftwareTier = getTier(softwareJob), qualifyingSecurityTier = getTier(securityJob);
+        const secBetter = (player.skills.strength + player.skills.defense + player.skills.dexterity + player.skills.agility) / 4 > player.skills.hacking;
+        const secAvailable = securityCompanies.includes(companyName);
+        const bestJobTier = secBetter && secAvailable ? qualifyingSecurityTier : 
+            Math.max(qualifyingItTier, qualifyingSoftwareTier); // Go with whatever job promotes us higher
+        const bestRoleName = secBetter && secAvailable ? "Security" :
+            qualifyingItTier > qualifyingSoftwareTier ? "IT" : "Software"; // If tied for qualifying tier, go for software
         if (currentJobTier < bestJobTier || currentRole != bestRoleName) { // We are ready for a promotion, ask for one!
             if (await tryApplyToCompany(ns, companyName, bestRoleName))
                 log(ns, `Successfully applied to "${companyName}" for a '${bestRoleName}' Job or Promotion`, false, 'success');
@@ -1185,13 +1398,18 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
             player = await getPlayerInfo(ns); // Update player.jobs info after attempted promotion
         }
         const currentJob = player.jobs[companyName];
-        const nextJobTier = currentRole == "IT" ? currentJobTier : currentJobTier + 1;
-        const nextJobName = currentRole == "IT" || nextJobTier >= itJob.reqRep.length ? "Software" : "IT";
-        const nextJob = nextJobName == "IT" ? itJob : softwareJob;
+        const nextJobTier = secBetter && secAvailable ? qualifyingSecurityTier + 1 : currentRole == "IT" ? currentJobTier : currentJobTier + 1;
+        const nextJobName = secBetter && secAvailable ? "Security" : currentRole == "IT" || nextJobTier >= itJob.reqRep.length ? "Software" : "IT";
+        const nextJob = secBetter && secAvailable ? securityJob : nextJobName == "IT" ? itJob : softwareJob;
         const requiredRep = nextJob.reqRep[nextJobTier] * (backdoored ? 0.75 : 1); // Rep requirement is decreased when company server is backdoored
         const requiredHack = nextJob.reqHck[nextJobTier] === 0 ? 0 : nextJob.reqHck[nextJobTier] + statModifier; // Stat modifier only applies to non-zero reqs
+        const requiredStr = nextJob.reqStr[nextJobTier] === 0 ? 0 : nextJob.reqStr[nextJobTier] + statModifier; // Stat modifier only applies to non-zero reqs
+        const requiredDef = nextJob.reqDef[nextJobTier] === 0 ? 0 : nextJob.reqDef[nextJobTier] + statModifier; // Stat modifier only applies to non-zero reqs
+        const requiredDex = nextJob.reqDex[nextJobTier] === 0 ? 0 : nextJob.reqDex[nextJobTier] + statModifier; // Stat modifier only applies to non-zero reqs
+        const requiredAgi = nextJob.reqAgi[nextJobTier] === 0 ? 0 : nextJob.reqAgi[nextJobTier] + statModifier; // Stat modifier only applies to non-zero reqs
         const requiredCha = nextJob.reqCha[nextJobTier] === 0 ? 0 : nextJob.reqCha[nextJobTier] + statModifier; // Stat modifier only applies to non-zero reqs
-        let status = `Next promotion ('${nextJobName}' #${nextJobTier}) at Hack:${requiredHack} Cha:${requiredCha} Rep:${requiredRep?.toLocaleString('en')}` +
+        let secStatStatus = secBetter && secAvailable ? `Str:${requiredStr} Def:${requiredDef} Dex:${requiredDex} Agi:${requiredAgi} ` : '';
+        let status = `Next promotion ('${nextJobName}' #${nextJobTier}) at Hack:${requiredHack} ` + secStatStatus + `Cha:${requiredCha} Rep:${requiredRep?.toLocaleString('en')}` +
             (repRequiredForFaction > requiredRep ? '' : `, but we won't need it, because we'll sooner hit ${repRequiredForFaction.toLocaleString('en')} reputation to unlock company faction "${factionName}"!`);
         if (nextJobTier >= nextJob.reqHck.length) // Special case status message if we're at the maximum promotion, but need additional reputation to unlock the company
             status = `We've reached the maximum promotion level, but are continuing to work until we hit ${repRequiredForFaction.toLocaleString('en')} reputation to unlock company faction "${factionName}."`;
@@ -1203,6 +1421,16 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
             // Check whether we can train stats in a "reasonable amount of time"
             const em = requiredCha / options['training-stat-per-multi-threshold'];
             const chaHeuristic = classHeuristic(player, 'charisma');
+            let eta_milliseconds = -1;
+            let hasFormulas = ns.fileExists("Formulas.exe", "home");
+            if (hasFormulas) {
+              try { 
+                eta_milliseconds = 
+                  1000 * (ns.formulas.skills.calculateExp(requiredCha, player.mults.charisma * bitNodeMults.CharismaLevelMultiplier) - ns.formulas.skills.calculateExp(player.skills.charisma, player.mults.charisma * bitNodeMults.CharismaLevelMultiplier)) 
+                  / (ns.formulas.work.universityGains(player, "Leadership", "ZB Institute of Technology").chaExp * 5);
+              }
+              catch {}
+            }
             if (chaHeuristic < em) {
                 if (!decidedNotToStudy) // Only generate the log below once
                     log(ns, `INFO: You are only lacking in Charisma to get our next promotion. Need: ${requiredCha}, Have: ${player.skills.charisma}` +
@@ -1212,10 +1440,15 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
                         `are probably too low to increase charisma from ${player.skills.charisma} to ${requiredCha} in a reasonable amount of time ` +
                         `(${formatNumberShort(chaHeuristic)} < ${formatNumberShort(em, 2)} - configure with --training-stat-per-multi-threshold)`);
                 decidedNotToStudy = true;
+            }
+            else if (eta_milliseconds > 5 * 60 * 1000) {
+              if (!decidedNotToStudy) // Only generate the log below once
+                log(ns, `Studying charisma takes too long (${formatDuration(eta_milliseconds)}).`);
+              decidedNotToStudy = true;
             } else // On any loop, we can change our mind and decide studying is worthwhile
                 decidedNotToStudy = false;
-            if (!decidedNotToStudy) {
-                status = `Studying at ZB university until Cha reaches ${requiredCha}...\n` + status;
+            if (!decidedNotToStudy || companyConfig.name == "Silhouette") {
+                status = `Studying at ZB university until Cha reaches ${requiredCha}...  ${eta_milliseconds == -1 ? "" : `(ETA:${formatDuration(eta_milliseconds)})`}\n` + status;
                 // TODO: See if we can re-use the function "monitorStudies" here instead of duplicating a lot of the same code.
                 let classType = currentWork.classType;
                 if (isStudying && !(classType && classType.toLowerCase().includes('leadership'))) {
@@ -1280,9 +1513,15 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
             const repGainRate = !isWorking ? 0 : await measureCompanyRepGainRate(ns, companyName);
             const eta = !isWorking ? "?" : formatDuration(1000 * ((requiredRep || repRequiredForFaction) - currentReputation) / repGainRate);
             player = await getPlayerInfo(ns);
+            let curSecStats = secBetter && secAvailable ? 
+                `Str:${player.skills.strength} ${player.skills.strength >= (requiredStr || 0) ? '✓' : '✗'} ` +
+                `Def:${player.skills.defense} ${player.skills.defense >= (requiredDef || 0) ? '✓' : '✗'} ` +
+                `Dex:${player.skills.dexterity} ${player.skills.dexterity >= (requiredDex || 0) ? '✓' : '✗'} ` +
+                `Agi:${player.skills.agility} ${player.skills.agility >= (requiredAgi || 0) ? '✓' : '✗'} ` : '';
             ns.print(`Currently a "${player.jobs[companyName]}" ('${currentRole}' #${currentJobTier}) for "${companyName}" earning ${formatNumberShort(repGainRate)} rep/sec. ` +
                 (hasFocusPenalty && !shouldFocus ? `(after 20% non-focus Penalty)` : '') + `\n` +
                 `${status}\nCurrent player stats are Hack:${player.skills.hacking} ${player.skills.hacking >= (requiredHack || 0) ? '✓' : '✗'} ` +
+                curSecStats +
                 `Cha:${player.skills.charisma} ${player.skills.charisma >= (requiredCha || 0) ? '✓' : '✗'} ` +
                 `Rep:${Math.round(currentReputation).toLocaleString('en')} ${currentReputation >= (requiredRep || repRequiredForFaction) ? '✓' : `✗ (ETA: ${eta})`}`);
         }
@@ -1299,4 +1538,21 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
     ns.print(`Stopped working for "${companyName}" repRequiredForFaction: ${repRequiredForFaction.toLocaleString('en')} ` +
         `currentReputation: ${Math.round(currentReputation).toLocaleString('en')} inFaction: ${player.factions.includes(factionName)}`);
     return false;
+}
+
+function medianRep(arr, dictAugRepReqs) {
+    // Sort the array
+    arr.sort((a, b) => dictAugRepReqs[a] - dictAugRepReqs[b]);
+
+    const length = arr.length;
+    const middle = Math.floor(length / 2);
+
+    // Check if the array length is even or odd
+    if (length % 2 === 0) {
+        // If even, return the average of middle two elements
+        return (dictAugRepReqs[arr[middle - 1]] + dictAugRepReqs[arr[middle]]) / 2;
+    } else {
+        // If odd, return the middle element
+        return dictAugRepReqs[arr[middle]];
+    }
 }

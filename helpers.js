@@ -622,6 +622,10 @@ export async function getActiveSourceFiles_Custom(ns, fnGetNsDataThroughFile, in
         dictSourceFiles[resetInfo.currentNode] = Math.max(effectiveSfLevel, dictSourceFiles[resetInfo.currentNode] || 0);
     }
 
+    if (dictSourceFiles[14] === 1 && resetInfo.currentNode === 14) {
+      dictSourceFiles[14] = 2;
+    }
+
     // If any bitNodeOptions were set, it might reduce our source file levels for gameplay purposes,
     // but the game currently has a bug where getOwnedSourceFiles won't reflect this, so we must do it ourselves.
     if ((resetInfo?.bitNodeOptions?.sourceFileOverrides?.size ?? 0) > 0) {
@@ -940,11 +944,11 @@ export function tail(ns, processId = undefined) {
         return //ns.tprint(`PID was previously moved ${processId}`);
     // By default, make all tail windows take up 75% of the width, 25% of the height available
     const [width, height] = ns.ui.windowSize();
-    ns.ui.resizeTail(width * 0.60, height * 0.25, processId);
+    ns.ui.resizeTail(width * 0.30, height * 0.2, processId);
     // Cascade windows: After each tail, shift the window slightly down and over so that they don't overlap
     let offsetPct = ((((tailedPids.length % 30.0) / 30.0) + tailedPids.length) % 6.0) / 6.0;
     ns.print(width, ' ', height, ' ', processId, ' ', offsetPct, ' ', tailedPids)
-    ns.ui.moveTail(offsetPct * (width * 0.25 - 300) + 250, offsetPct * (height * 0.75 - 100) + 50, processId);
+    ns.ui.moveTail(offsetPct * (width * 0.2 - 300) + 250, offsetPct * (height * 0.75 - 100) + 50, processId);
     tailedPids.push(processId);
     ns.write(tailFile, JSON.stringify(tailedPids), 'w');
 }
