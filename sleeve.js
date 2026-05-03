@@ -308,7 +308,7 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
     // Pick the best crime based on success chances
     var crime = options.crime || (await calculateCrimeChance(ns, sleeve, "Homicide")) >= options['homicide-chance-threshold'] ? 'Homicide' : 'Mug';
     if (!playerInGang && !options['disable-gang-homicide-priority'] && (2 in ownedSourceFiles) && ns.heart.break() > -54000)
-        return await crimeTask(ns, crime, i, sleeve, 'we want gang karma'); // Ignore chance - even a failed homicide generates more Karma than every other crime
+        return await crimeTask(ns, 'Homicide', i, sleeve, 'we want gang karma'); // Ignore chance - even a failed homicide generates more Karma than every other crime
     // If the player is in bladeburner, and has already unlocked gangs with Karma, generate contracts and operations
     if (playerInBladeburner) {
         // Hack: Without paying much attention to what's happening in bladeburner, pre-assign a variety of tasks by sleeve index

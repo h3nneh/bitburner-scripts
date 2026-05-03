@@ -192,7 +192,7 @@ async function mainLoop(ns) {
     const myGangInfo = await getNsDataThroughFile(ns, 'ns.gang.getGangInformation()');
     const thisLoopStart = Date.now();
     if (!territoryTickDetected) { // Detect the first territory tick by watching for other gang's territory power to update.
-        const otherGangInfo = await getNsDataThroughFile(ns, 'ns.gang.getOtherGangInformation()'); // Returns dict of { [gangName]: { "power": Number, "territory": Number } }
+        const otherGangInfo = await getNsDataThroughFile(ns, 'ns.gang.getAllGangInformation()'); // Returns dict of { [gangName]: { "power": Number, "territory": Number } }
         if (lastOtherGangInfo != null && JSON.stringify(otherGangInfo) != JSON.stringify(lastOtherGangInfo)) {
             territoryNextTick = lastLoopTime + territoryTickTime;
             territoryTickDetected = true;
@@ -437,7 +437,7 @@ async function tryUpgradeMembers(ns, dictMembers) {
     let augBudget = Math.min(maxBudget, (options['augmentations-budget'] || defaultMaxSpendPerTickPermanentEquipment)) * homeMoney;
     // Hack: Default aug budget is cut by 1/100 in a few situations (TODO: Add more, like when BitnodeMults are such that gang income is severely nerfed)
     if (!is4sBought)
-        is4sBought = await getNsDataThroughFile(ns, 'ns.stock.has4SDataTIXAPI()');
+        is4sBought = await getNsDataThroughFile(ns, `ns.stock.has4SDataTixApi()`);
     if (!is4sBought || resetInfo.currentNode === 8) {
         budget /= 100;
         augBudget /= 100;
@@ -512,7 +512,7 @@ async function waitForGameUpdate(ns, oldGangInfo) {
 async function enableOrDisableWarfare(ns, myGangInfo) {
     warfareFinished = Math.round(myGangInfo.territory * 2 ** 20) / 2 ** 20 /* Handle API imprecision */ >= 1;
     if (warfareFinished && !myGangInfo.territoryWarfareEngaged) return; // No need to engage once we hit 100%
-    const otherGangs = await getNsDataThroughFile(ns, 'ns.gang.getOtherGangInformation()'); // Returns dict of { [gangName]: { "power": Number, "territory": Number } }
+    const otherGangs = await getNsDataThroughFile(ns, 'ns.gang.getAllGangInformation()'); // Returns dict of { [gangName]: { "power": Number, "territory": Number } }
     let lowestWinChance = 1, totalWinChance = 0, totalActiveGangs = 0;
     let lowestWinChanceGang = "";
     for (const otherGang in otherGangs) {
