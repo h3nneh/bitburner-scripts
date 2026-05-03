@@ -358,20 +358,20 @@ export async function main(ns) {
         // ASYNCHRONOUS HELPERS
         // Set up "asynchronous helpers" - standalone scripts to manage certain aspacts of the game. daemon.js launches each of these once when ready (but not again if they are shut down)
         asynchronousHelpers = [
-            { name: "stats.js", shouldRun: () => reqRam(64), shouldTail: false }, // Adds stats not usually in the HUD (nice to have)
-            { name: "go.js", shouldRun: () => reqRam(64), minRamReq: 20.2 }, // Play go.js (various multipliers, but large dynamic ram requirements)
-            { name: "stockmaster.js", shouldRun: () => reqRam(64), args: openTailWindows ? ["--show-market-summary"] : [] }, // Start our stockmaster
-            { name: "hacknet-upgrade-manager.js", shouldRun: () => shouldUpgradeHacknet(), args: ["-c", "--max-payoff-time", "1h", "--interval", "0"], shouldTail: false }, // One-time kickstart of hash income by buying everything with up to 1h payoff time immediately
-            { name: "spend-hacknet-hashes.js", shouldRun: () => reqRam(64) && 9 in dictSourceFiles, args: [], shouldTail: false }, // Always have this running to make sure hashes aren't wasted
-            { name: "sleeve.js", shouldRun: () => reqRam(64) && 10 in dictSourceFiles }, // Script to create manage our sleeves for us
-            { name: "gangs.js", shouldRun: () => reqRam(64) && 2 in dictSourceFiles }, // Script to create manage our gang for us
+            { name: "Dev/stats.js", shouldRun: () => reqRam(64), shouldTail: false }, // Adds stats not usually in the HUD (nice to have)
+            { name: "Dev/go.js", shouldRun: () => reqRam(64), minRamReq: 20.2 }, // Play go.js (various multipliers, but large dynamic ram requirements)
+            { name: "Management/stockmaster.js", shouldRun: () => reqRam(64), args: openTailWindows ? ["--show-market-summary"] : [] }, // Start our stockmaster
+            { name: "Management/hacknet-upgrade-manager.js", shouldRun: () => shouldUpgradeHacknet(), args: ["-c", "--max-payoff-time", "1h", "--interval", "0"], shouldTail: false }, // One-time kickstart of hash income by buying everything with up to 1h payoff time immediately
+            { name: "Management/spend-hacknet-hashes.js", shouldRun: () => reqRam(64) && 9 in dictSourceFiles, args: [], shouldTail: false }, // Always have this running to make sure hashes aren't wasted
+            { name: "Activities/sleeve.js", shouldRun: () => reqRam(64) && 10 in dictSourceFiles }, // Script to create manage our sleeves for us
+            { name: "Activities/gangs.js", shouldRun: () => reqRam(64) && 2 in dictSourceFiles }, // Script to create manage our gang for us
             {
-                name: "work-for-factions.js", args: ['--fast-crimes-only', '--no-coding-contracts'],  // Singularity script to manage how we use our "focus" work.
+                name: "Activities/work-for-factions.js", args: ['--fast-crimes-only', '--no-coding-contracts'],  // Singularity script to manage how we use our "focus" work.
                 shouldRun: () => 4 in dictSourceFiles && reqRam(256 / (2 ** dictSourceFiles[4]) && !studying) // Higher SF4 levels result in lower RAM requirements
             },
             {
-                name: "bladeburner.js", // Script to manage bladeburner for us. Run automatically if not disabled and bladeburner API is available
-                shouldRun: () => !options['disable-script'].includes('bladeburner.js') && reqRam(64)
+                name: "Activities/bladeburner.js", // Script to manage bladeburner for us. Run automatically if not disabled and bladeburner API is available
+                shouldRun: () => !options['disable-script'].includes('Activities/bladeburner.js') && reqRam(64)
                     && 7 in dictSourceFiles && bitNodeMults.BladeburnerRank != 0 // Don't run bladeburner in BN's where it can't rank up (currently just BN8)
             },
         ];
@@ -393,22 +393,22 @@ export async function main(ns) {
             { interval: 26000, name: "/Tasks/program-manager.js", shouldRun: () => 4 in dictSourceFiles && ownedCracks.length != 5 },
             { interval: 27000, name: "/Tasks/contractor.js", minRamReq: 14.2 }, // Periodically look for coding contracts that need solving
             // Buy every hacknet upgrade with up to 4h payoff if it is less than 10% of our current money or 8h if it is less than 1% of our current money.
-            { interval: 28000, name: "hacknet-upgrade-manager.js", shouldRun: shouldUpgradeHacknet, args: () => ["-c", "--max-payoff-time", "4h", "--max-spend", getPlayerMoney(ns) * 0.1] },
-            { interval: 28500, name: "hacknet-upgrade-manager.js", shouldRun: shouldUpgradeHacknet, args: () => ["-c", "--max-payoff-time", "8h", "--max-spend", getPlayerMoney(ns) * 0.01] },
+            { interval: 28000, name: "Management/hacknet-upgrade-manager.js", shouldRun: shouldUpgradeHacknet, args: () => ["-c", "--max-payoff-time", "4h", "--max-spend", getPlayerMoney(ns) * 0.1] },
+            { interval: 28500, name: "Management/hacknet-upgrade-manager.js", shouldRun: shouldUpgradeHacknet, args: () => ["-c", "--max-payoff-time", "8h", "--max-spend", getPlayerMoney(ns) * 0.01] },
             // Buy upgrades regardless of payoff if they cost less than 0.1% of our money
-            { interval: 29000, name: "hacknet-upgrade-manager.js", shouldRun: shouldUpgradeHacknet, args: () => ["-c", "--max-payoff-time", "1E100h", "--max-spend", getPlayerMoney(ns) * 0.001] },
+            { interval: 29000, name: "Management/hacknet-upgrade-manager.js", shouldRun: shouldUpgradeHacknet, args: () => ["-c", "--max-payoff-time", "1E100h", "--max-spend", getPlayerMoney(ns) * 0.001] },
             {   // Spend about 50% of un-reserved cash on home RAM upgrades (permanent) when they become available
                 interval: 30000, name: "/Tasks/ram-manager.js", args: () => ['--budget', 0.5, '--reserve', reservedMoney(ns)],
                 shouldRun: () => 4 in dictSourceFiles && shouldImproveHacking() // Only trigger if hack income is important
             },
             {   // Periodically check for new faction invites and join if deemed useful to be in that faction. Also determines how many augs we could afford if we installed right now
-                interval: 31000, name: "faction-manager.js", args: ['--verbose', 'false'],
+                interval: 31000, name: "Activities/faction-manager.js", args: ['--verbose', 'false'],
                 // Don't start auto-joining factions until we're holding 1 billion (so coding contracts returning money is probably less critical) or we've joined one already
                 shouldRun: () => 4 in dictSourceFiles && (_cachedPlayerInfo.factions.length > 0 || getPlayerMoney(ns) > 1e9) &&
                     reqRam(128 / (2 ** dictSourceFiles[4])) // Uses singularity functions, and higher SF4 levels result in lower RAM requirements
             },
             {   // Periodically look to purchase new servers, but note that these are often not a great use of our money (hack income isn't everything) so we may hold-back.
-                interval: 32000, name: "host-manager.js", minRamReq: 6.55,
+                interval: 32000, name: "Management/host-manager.js", minRamReq: 6.55,
                 // Restrict spending on new servers (i.e. temporary RAM for the current augmentation only) to be a % of total earned hack income.
                 shouldRun: () => shouldImproveHacking() && getHostManagerBudget() > 0,
                 args: () => ['--budget', getHostManagerBudget(), '--absolute-reserve', reservedMoney(ns),
@@ -1044,7 +1044,7 @@ export async function main(ns) {
         dictServerMinSecurityLevels = await getServersDict(ns, 'getServerMinSecurityLevel');
         dictServerMaxMoney = await getServersDict(ns, 'getServerMaxMoney');
         // Get the information about the relative profitability of each server (affects targetting order)
-        const pid = await exec(ns, getFilePath('analyze-hack.js'), null, null, '--all', '--silent');
+        const pid = await exec(ns, getFilePath('Dev/analyze-hack.js'), null, null, '--all', '--silent');
         await waitForProcessToComplete_Custom(ns, getHomeProcIsAlive(ns), pid);
         const analyzeHackResult = dictServerProfitInfo = ns.read('/Temp/analyze-hack.txt');
         if (!analyzeHackResult)

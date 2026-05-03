@@ -31,8 +31,8 @@ const tryPassword = async (ns, hostname, password) => {
 };
 
 export async function main(ns) {
-  const promoteRam = ns.getScriptRam("promote.js", "home");
-  const workerRam = ns.getScriptRam("worker.js", "home");
+  const promoteRam = ns.getScriptRam("Activities/promote.js", "home");
+  const workerRam = ns.getScriptRam("Activities/worker.js", "home");
 
   while (true) {
     const nearbyServers = ns.dnet.probe();
@@ -40,7 +40,7 @@ export async function main(ns) {
     for (const hostname of nearbyServers) {
       if (!(await serverSolver(ns, hostname))) continue;
 
-      ns.scp([ns.getScriptName(), "worker.js", "promote.js", "helpers.js"], hostname);
+      ns.scp([ns.getScriptName(), "Activities/worker.js", "Activities/promote.js", "helpers.js"], hostname);
       ns.kill(ns.getScriptName(), hostname);
       ns.exec(ns.getScriptName(), hostname, { preventDuplicates: true });
 
@@ -51,13 +51,13 @@ export async function main(ns) {
       if (hasStocks && promoteRam > 0) {
         const t = Math.floor((totalFree * 0.7) / promoteRam);
         if (t > 0) {
-          ns.exec("promote.js", hostname, { threads: t, preventDuplicates: true });
+          ns.exec("Activities/promote.js", hostname, { threads: t, preventDuplicates: true });
           remaining -= t * promoteRam;
         }
       }
       if (workerRam > 0) {
         const t = Math.floor(remaining / workerRam);
-        if (t > 0) ns.exec("worker.js", hostname, { threads: t, preventDuplicates: true });
+        if (t > 0) ns.exec("Activities/worker.js", hostname, { threads: t, preventDuplicates: true });
       }
     }
 

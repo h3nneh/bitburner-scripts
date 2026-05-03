@@ -349,7 +349,7 @@ export async function main(ns) {
             if (player.money < moneyReq) { // Only liquidate stocks if we don't have enough cash lying around.
                 disableStockmasterForDaedalus = true; // Flag to keep stockmaster offline until we've gotten a daedalus invite
                 log(ns, "INFO: Temporarily liquidating stocks to earn an invite to Daedalus...", true, 'info');
-                launchScriptHelper(ns, 'stockmaster.js', ['--liquidate']);
+                launchScriptHelper(ns, 'Management/stockmaster.js', ['--liquidate']);
             } // else if we don't liquidate stocks, and our money dips below 100E9 again, we can always do it on the next loop
         } else if (resetInfo.currentNode == 8) {
             // In BN8, there is nothing worth spending money on when we've met all other Daedalus requirements except the $100b money.
@@ -519,24 +519,24 @@ export async function main(ns) {
         homeRam = await getNsDataThroughFile(ns, `ns.getServerMaxRam(ns.args[0])`, null, ["home"]);
 
         // Launch stock-master in a way that emphasizes it as our main source of income early-on
-        if (!findScript('stockmaster.js') && !disableStockmasterForDaedalus && homeRam >= 32)
-            launchScriptHelper(ns, 'stockmaster.js', [
+        if (!findScript('Management/stockmaster.js') && !disableStockmasterForDaedalus && homeRam >= 32)
+            launchScriptHelper(ns, 'Management/stockmaster.js', [
                 "--fracH", resetInfo.currentNode == 8 ? 0.001 : 0.1, // Fraction of wealth to keep as cash (10% - unless in BN8)
                 "--reserve", 0, // Override to ignore the global reserve.txt. Any money we reserve can more or less safely live as stocks
             ]);
 
         // Launch sleeves and allow them to also ignore the reserve so they can train up to boost gang unlock speed
-        if ((10 in unlockedSFs) && (2 in unlockedSFs) && !findScript('sleeve.js')) {
+        if ((10 in unlockedSFs) && (2 in unlockedSFs) && !findScript('Activities/sleeve.js')) {
             let sleeveArgs = ["--disable-follow-player"];
             if (!options["disable-casino"] && !ranCasino)
                 sleeveArgs.push("--training-reserve", 300000); // Avoid training away our casino seed money
             if (options["disable-bladeburner"])
                 sleeveArgs.push("--disable-bladeburner");
-            launchScriptHelper(ns, 'sleeve.js', sleeveArgs);
+            launchScriptHelper(ns, 'Activities/sleeve.js', sleeveArgs);
         }
 
         // Spend hacknet hashes on our boosting best hack-income server once established
-        let existingSpendHashesProc = findScript('spend-hacknet-hashes.js', s => s.args.includes("--spend-on-server"))
+        let existingSpendHashesProc = findScript('Management/spend-hacknet-hashes.js', s => s.args.includes("--spend-on-server"))
         if ((9 in unlockedSFs) && getTimeInAug() >= options['time-before-boosting-best-hack-server']
             && 0 != bitNodeMults.ScriptHackMoney * bitNodeMults.ScriptHackMoneyGain) // No point in boosting hack income if it's scaled to 0 in the current BN
         {
@@ -561,7 +561,7 @@ export async function main(ns) {
                         if (currentBoostTarget != bestServer || isReducingSecurity != shouldReduceMinSecurity) {
                             log(ns, `Killing a prior spend-hacknet-hashes.js process targetting ${currentBoostTarget} because ` +
                                 (currentBoostTarget != bestServer ? `The new best income server is ${bestServer}.` : 'We no longer need to reduce minimum security.'), true);
-                            await killScript(ns, 'spend-hacknet-hashes.js', null, existingSpendHashesProc);
+                            await killScript(ns, 'Management/spend-hacknet-hashes.js', null, existingSpendHashesProc);
                             existingSpendHashesProc = false;
                         }
                     }
@@ -569,7 +569,7 @@ export async function main(ns) {
                         log(ns, `Identified that the best hack income server is ${bestServer} worth ${formatMoney(gain)}/sec.`);
                         const spendHashesArgs = ["--liquidate", "--spend-on-server", bestServer, "--spend-on", "Increase_Maximum_Money"];
                         if (shouldReduceMinSecurity) spendHashesArgs.push("--spend-on", "Reduce_Minimum_Security");
-                        launchScriptHelper(ns, 'spend-hacknet-hashes.js', spendHashesArgs);
+                        launchScriptHelper(ns, 'Management/spend-hacknet-hashes.js', spendHashesArgs);
                     }
                 } else if (gain <= 1)
                     log_once(ns, `INFO: The best server (${bestServer})'s hack income multiplier (${formatNumber(gain)}) is currently too severely penalized ` +
@@ -631,11 +631,11 @@ export async function main(ns) {
                 }
             }
             // Prevent daemon from starting "work-for-faction.js" since we now manage that script
-            daemonArgs.push('--disable-script', getFilePath('work-for-factions.js'));
+            daemonArgs.push('--disable-script', getFilePath('Activities/work-for-factions.js'));
             // In BN8, always run in a mode that prioritizes stock market manipulation
             if (resetInfo.currentNode == 8) daemonArgs.push("--stock-manipulation-focus");
             // Don't run the script to join and manage bladeburner if it is explicitly disabled
-            if (options['disable-bladeburner']) daemonArgs.push('--disable-script', getFilePath('bladeburner.js'));
+            if (options['disable-bladeburner']) daemonArgs.push('--disable-script', getFilePath('Activities/bladeburner.js'));
             // Relay the option to suppress tail windows
             if (options['no-tail-windows']) daemonArgs.push('--no-tail-windows');
             // If we have SF4, but not level 3, instruct daemon.js to reserve additional home RAM
@@ -644,13 +644,13 @@ export async function main(ns) {
         }
 
         // Once stanek's gift is accepted, launch it once per reset before we launch daemon (Note: stanek's gift is auto-purchased by faction-manager.js on your first install)
-        let stanekRunning = (13 in unlockedSFs) && findScript('stanek.js') !== undefined;
+        let stanekRunning = (13 in unlockedSFs) && findScript('Activities/stanek.js') !== undefined;
         if ((13 in unlockedSFs) && !stanekLaunched && !stanekRunning && installedAugmentations.includes(augStanek)) {
             stanekLaunched = true; // Once we've know we've launched stanek once, we never have to again this reset.
             const stanekArgs = ["--on-completion-script", getFilePath('daemon.js')]
             if (options['no-tail-windows']) stanekArgs.push('--no-tail'); // Relay the option to suppress tail windows
             if (daemonArgs.length >= 0) stanekArgs.push("--on-completion-script-args", JSON.stringify(daemonArgs)); // Pass in all the args we wanted to run daemon.js with
-            launchScriptHelper(ns, 'stanek.js', stanekArgs);
+            launchScriptHelper(ns, 'Activities/stanek.js', stanekArgs);
             stanekRunning = true;
         }
         // If stanek is running, tell daemon to reserve all home RAM for it.
@@ -682,39 +682,39 @@ export async function main(ns) {
         // Relay the options to suppress tail windows and ignore bladeburner
         if (options['no-tail-windows']) workForFactionsArgs.push('--no-tail-windows');
         if (options['disable-bladeburner']) workForFactionsArgs.push("--no-bladeburner-check")
-        // The following args are ideal when running 'work-for-factions.js' to rush unlocking gangs (earn karma)
+        // The following args are ideal when running 'Activities/work-for-factions.js' to rush unlocking gangs (earn karma)
         const rushGangsArgs = workForFactionsArgs.concat(...[ // Everything above, plus...
             "--crime-focus", // Start off by trying to work for each of the crime factions (generally have combat reqs)
             "--training-stat-per-multi-threshold", 200, // Be willing to spend more time grinding for stats rather than skipping a faction
             "--prioritize-invites"]); // Don't actually start working for factions until we've earned as many invites as we think we can
-        // If gangs are unlocked, micro-manage how 'work-for-factions.js' is running by killing off unwanted instances
+        // If gangs are unlocked, micro-manage how 'Activities/work-for-factions.js' is running by killing off unwanted instances
         if (2 in unlockedSFs) {
             // Check if we've joined a gang yet. (Never have to check again once we know we're in one)
             if (!playerInGang) playerInGang = await getNsDataThroughFile(ns, 'ns.gang.inGang()');
             rushGang = !options['disable-rush-gangs'] && !playerInGang;
-            // Detect if a 'work-for-factions.js' instance is running with args that don't match our goal. We aren't too picky,
+            // Detect if a 'Activities/work-for-factions.js' instance is running with args that don't match our goal. We aren't too picky,
             // (so the player can run with custom args), but should have --crime-focus if (and only if) we're still working towards a gang.
-            const wrongWork = findScript('work-for-factions.js', !rushGang ? s => s.args.includes("--crime-focus") :
+            const wrongWork = findScript('Activities/work-for-factions.js', !rushGang ? s => s.args.includes("--crime-focus") :
                 s => !rushGangsArgs.every(a => s.args.includes(a))); // Require all rushGangsArgs if we're not in a gang yet.
             // If running with the wrong args, kill it so we can start it with the desired args
-            if (wrongWork) await killScript(ns, 'work-for-factions.js', null, wrongWork);
+            if (wrongWork) await killScript(ns, 'Activities/work-for-factions.js', null, wrongWork);
 
             // Start gangs immediately (even though daemon would eventually start it) since we want any income they provide right away after an ascend
             // TODO: Consider monitoring gangs territory progress and increasing their budget / decreasing their reserve to help kick-start them
-            if (playerInGang && !findScript('gangs.js'))
-                launchScriptHelper(ns, 'gangs.js');
+            if (playerInGang && !findScript('Activities/gangs.js'))
+                launchScriptHelper(ns, 'Activities/gangs.js');
         }
 
         // Launch darknet.ts to explore and crack dnet servers
-        if (!options['disable-darknet'] && !findScript('darknet.ts'))
-            launchScriptHelper(ns, 'darknet.ts');
+        if (!options['disable-darknet'] && !findScript('Activities/darknet.ts'))
+            launchScriptHelper(ns, 'Activities/darknet.ts');
 
         // Launch work-for-factions if it isn't already running (rules for maybe killing unproductive instances are above)
-        // Note: We delay launching our own 'work-for-factions.js' until daemon has warmed up, so we don't steal it's "kickstartHackXp" study focus
-        if ((4 in unlockedSFs) && !findScript('work-for-factions.js') && Date.now() - daemonStartTime > 30000) {
+        // Note: We delay launching our own 'Activities/work-for-factions.js' until daemon has warmed up, so we don't steal it's "kickstartHackXp" study focus
+        if ((4 in unlockedSFs) && !findScript('Activities/work-for-factions.js') && Date.now() - daemonStartTime > 30000) {
             // If we're trying to rush gangs, run in such a way that we will spend most of our time doing crime, reducing Karma (also okay early income)
             // NOTE: Default work-for-factions behaviour is to spend hashes on coding contracts, which suits us fine
-            launchScriptHelper(ns, 'work-for-factions.js', rushGang ? rushGangsArgs : workForFactionsArgs);
+            launchScriptHelper(ns, 'Activities/work-for-factions.js', rushGang ? rushGangsArgs : workForFactionsArgs);
         }
     }
 
@@ -795,13 +795,13 @@ export async function main(ns) {
 
         // Run casino.js (and expect this script to get killed in the process)
         // Make sure "work-for-factions.js" is dead first, lest it steal focus and break the casino script before it has a chance to kill all scripts.
-        await killScript(ns, 'work-for-factions.js');
+        await killScript(ns, 'Activities/work-for-factions.js');
         await killScript(ns, 'daemon.js'); // We also have to kill daemon which can make us study.
         // Kill any action, in case we are studying or working out, as it might steal focus or funds before we can bet it at the casino.
         if (4 in unlockedSFs) // No big deal if we can't, casino.js has logic to find the stop button and click it.
             _ = await getNsDataThroughFile(ns, `ns.singularity.stopAction()`);
 
-        const pid = launchScriptHelper(ns, 'casino.js', ['--kill-all-scripts', true, '--on-completion-script', ns.getScriptName()]);
+        const pid = launchScriptHelper(ns, 'Activities/casino.js', ['--kill-all-scripts', true, '--on-completion-script', ns.getScriptName()]);
         if (pid) {
             await waitForProcessToComplete(ns, pid);
             await ns.sleep(10000); // Give time for this script to be killed if the game is being restarted by casino.js
@@ -832,7 +832,7 @@ export async function main(ns) {
         if (reservedPurchase && installCountdown <= Date.now()) {
             log(ns, "INFO: Manually running faction-manager.js to ensure previously reserved purchase is still obtainable.");
             ns.write(factionManagerOutputFile, "", "w"); // Reset the output file to ensure it isn't stale
-            const pid = launchScriptHelper(ns, 'faction-manager.js');
+            const pid = launchScriptHelper(ns, 'Activities/faction-manager.js');
             await waitForProcessToComplete(ns, pid, true); // Wait for the script to shut down (and output to be generated)
         }
 
@@ -961,7 +961,7 @@ export async function main(ns) {
         const ascendArgs = ['--install-augmentations', true, '--on-reset-script', ns.getScriptName()]
         if (pendingAugInclNfCount == 0) // If we know we would install 0 augs, but still wish to reset, we must enable soft resetting
             ascendArgs.push("--allow-soft-reset")
-        let pid = launchScriptHelper(ns, 'ascend.js', ascendArgs);
+        let pid = launchScriptHelper(ns, 'Activities/ascend.js', ascendArgs);
         if (pid) {
             await waitForProcessToComplete(ns, pid, true); // Wait for the script to shut down (Ascend should get killed as it does, since the BN will be rebooting)
             await ns.sleep(1000); // If we've been scheduled to be killed, awaiting an NS function should trigger it?

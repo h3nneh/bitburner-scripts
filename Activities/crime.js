@@ -1,5 +1,5 @@
 import { instanceCount, getNsDataThroughFile, formatDuration, formatNumberShort, tail } from './helpers.js'
-import { crimeForKillsKarmaStats } from './work-for-factions.js'
+import { crimeForKillsKarmaStats } from './Activities/work-for-factions.js'
 
 const crimes = ["Shoplift", "Rob Store", "Mug", "Larceny", "Deal Drugs", "Bond Forgery", "Traffick Arms", "Homicide", "Grand Theft Auto", "Kidnap", "Assassination", "Heist"]
 const argFastCrimesOnly = "--fast-crimes-only";
