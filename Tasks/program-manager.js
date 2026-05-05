@@ -4,7 +4,7 @@
  * or write them ourselves. Like tor-manager, this script dies a natural death
  * once all programs are bought. **/
 export async function main(ns) {
-    const programNames = ["BruteSSH.exe", "FTPCrack.exe", "relaySMTP.exe", "HTTPWorm.exe", "SQLInject.exe"];
+    const programNames = ["BruteSSH.exe", "FTPCrack.exe", "relaySMTP.exe", "HTTPWorm.exe", "SQLInject.exe", "DarkscapeNavigator.exe"];
     const interval = 2000;
 
     const keepRunning = ns.args.length > 0 && ns.args[0] == "-c";
