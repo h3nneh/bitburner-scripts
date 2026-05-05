@@ -929,5 +929,115 @@ export const codingContractTypesMetadata = [{
             throw new Error(`Square Root did not converge. Arrived at answer:\n${root} - which when squared, gives:\n${root * root} instead of\n${n}`);
         return root.toString();
     }
+},
+{
+    name: "Largest Rectangle in a Matrix",
+    solver: function(data) {
+      const histograms = Array.from({ length: data.length }, () => Array(data[0].length).fill(0));
+      for (let i = 0; i < data[0].length; i++) {
+        let count = 0;
+        for (let j = 0; j < data.length; j++) {
+          if (data[j][i] == 0) {
+            count++;
+          } else {
+            count = 0;
+          }
+          histograms[j][i] = count;
+        }
+      }
+      let maxArea = 0;
+      let maxL = 0;
+      let maxR = 0;
+      let maxU = 0;
+      let maxD = 0;
+      for (let i = 0; i < histograms.length; i++) {
+        const row = histograms[i];
+        for (let j = 0; j < row.length; j++) {
+          if (row[j] == 0) continue;
+          let left = j;
+          let right = j;
+          // If the index is -1/row.length (out of bounds), it will return undefined. That's when comparing to a number
+          // also returns false.
+          while (row[left - 1] >= row[j]) {
+            left--;
+          }
+          while (row[right + 1] >= row[j]) {
+            right++;
+          }
+          if ((right - left + 1) * row[j] > maxArea) {
+            maxArea = (right - left + 1) * row[j];
+            maxL = left;
+            maxR = right;
+            maxU = i - row[j] + 1;
+            maxD = i;
+          }
+        }
+      }
+      return [
+        [maxU, maxL],
+        [maxD, maxR],
+      ];
+    }
+},
+{
+    name: "Total Number of Primes",
+    solver: function(data) {
+       // Simple implementation of Sieve of Eratosthenes
+       // https://en.wikipedia.org/wiki/Sieve_of_Eratosthenes
+      function simpleSieve(max) {
+        const primes = [];
+        //The array of numbers to check if they're prime is left blank. Blank and resulting prime values are falsey, non-primes are marked truthy.
+        const arr = Array(max);
+        //We only need to check factors up to the square root of max
+        for (let i = 2; i * i <= max; i++) {
+          //and only the prime factors
+          if (!arr[i]) {
+            //and we can then mark off all subsequent multiples of that prime
+            for (let p = i * i; p <= max; p += i) {
+              arr[p] = 1;
+            }
+          }
+        }
+        //It should be faster to loop over the array again than to check factors all the way to max and mark primes at the same time.
+        for (let i = 2; i <= max; i++) {
+          if (!arr[i]) {
+            primes.push(i);
+          }
+        }
+        return primes;
+      }
+
+      // Modified Sieve of Eratosthenes to find primes across a range, rather than all primes below a value.
+      function primeSieve(low, high) {
+        //0 and 1 are not checked, so are removed here.
+        if (low < 2) {
+          low = 2;
+        }
+        let primes = 0;
+        //Only store the potential primes in the low to high range instead of 0 to high.
+        const arr = Array(high - low + 1);
+        //In order to mark off all composite numbers, we need to run up through sqrt(high), since primes squares are the worst case.
+        const checks = simpleSieve(Math.ceil(Math.sqrt(high)));
+        for (const i of checks) {
+          //same logic as for the simple sieve to mark off multiples of identified primes, but we only start checking at the first multiple>=low.
+          const lim = Math.max(i, Math.ceil(low / i)) * i;
+          for (let j = lim; j <= high; j += i) {
+            arr[j - low] = 1;
+          }
+        }
+        for (let a = 0; a <= high - low; a++) {
+          if (!arr[a]) {
+            //We don't really care what the value of the prime is, just how many we find.
+            ++primes;
+          }
+        }
+        return primes;
+      }
+
+      //We trust the player generated the appropriate list of primes (or is more accurate at guessing primes than Gauss was at this range) and as such they deserve the reward.
+      const primes = primeSieve(data[0], data[1]);
+
+      return primes;
+    }
 }
 ]
