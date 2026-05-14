@@ -936,8 +936,15 @@ export async function main(ns) {
             return Math.floor((this.percentageToSteal / this.percentageStolenPerHackThread()).toPrecision(14));
         }
         getGrowThreadsNeeded() {
+            if (hasFormulas) {
+                try {
+                    this.server.hackDifficulty = this.getMinSecurity();
+                    this.server.moneyAvailable = this.getMoney();
+                    return Math.max(0, Math.ceil(this.ns.formulas.hacking.growThreads(
+                        this.server, _cachedPlayerInfo, this.getMaxMoney())));
+                } catch { hasFormulas = false; }
+            }
             return Math.max(0, Math.ceil(Math.min(this.getMaxMoney(),
-                // TODO: Not true! Worst case is 1$ per thread and *then* it multiplies. We can return a much lower number here.
                 this.cyclesNeededForGrowthCoefficient() / this.serverGrowthPercentage()).toPrecision(14)));
         }
         getWeakenThreadsNeeded() {
@@ -945,6 +952,15 @@ export async function main(ns) {
         }
         getGrowThreadsNeededAfterTheft() {
             // Note: If recovery thread padding > 1.0, require a minimum of 2 recovery threads, no matter how scaled stats are
+            if (hasFormulas) {
+                try {
+                    this.server.hackDifficulty = this.getMinSecurity();
+                    this.server.moneyAvailable = Math.max(0, this.getMaxMoney() * (1 - this.actualPercentageToSteal()));
+                    return Math.max(recoveryThreadPadding > 1 ? 2 : 1, Math.ceil(
+                        this.ns.formulas.hacking.growThreads(
+                            this.server, _cachedPlayerInfo, this.getMaxMoney()) * recoveryThreadPadding));
+                } catch { hasFormulas = false; }
+            }
             return Math.max(recoveryThreadPadding > 1 ? 2 : 1, Math.ceil(Math.min(this.getMaxMoney(),
                 this.cyclesNeededForGrowthCoefficientAfterTheft() / this.serverGrowthPercentage() * recoveryThreadPadding).toPrecision(14)));
         }
