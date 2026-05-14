@@ -55,6 +55,7 @@ export async function main(ns) {
     while (true) {
         try {
             await openLocalCaches(ns);
+            tryStasisLink(ns, String(options.origin));
             await freeLocalBlockedRam(ns);
             if (!options["disable-phishing"]) await tryPhishing(ns);
             await crawlNeighbors(ns, script, String(options.origin), interval, maxAttempts, options["verbose-terminal"]);
@@ -395,6 +396,24 @@ function unique(values) {
 function terminalLog(ns, verboseTerminal, message) {
     if (verboseTerminal) ns.tprint(message);
     else ns.print(message);
+}
+
+function tryStasisLink(ns, origin) {
+    const host = ns.getHostname();
+    if (host === "darkweb" || host === origin) return;
+    if (ns.getServerMaxRam(host) < 256) return;
+    try {
+        const linked = ns.dnet.getStasisLinkedServers();
+        if (linked.includes(host)) return;
+        ns.dnet.setStasisLink(true).then(result => {
+            if (result.success) ns.print(`SUCCESS: Stasis-linked ${host}.`);
+            else ns.print(`INFO: Stasis link on ${host} failed: ${result.message}`);
+        }).catch(err => {
+            ns.print(`WARN: Stasis link error on ${host}: ${formatError(err)}`);
+        });
+    } catch (err) {
+        ns.print(`WARN: Could not initiate stasis link on ${host}: ${formatError(err)}`);
+    }
 }
 
 function formatError(error) {
