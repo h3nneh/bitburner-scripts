@@ -281,13 +281,12 @@ export async function getNsDataThroughFile_Custom(ns, fnRun, command, fName = nu
     const commandToFile = `let r;try{r=JSON.stringify(\n` +
         `    ${command}\n` +
         `, jsonReplacer);}catch(e){r="ERROR: "+(typeof e=='string'?e:e?.message??JSON.stringify(e));}\n` +
-        `const f="${fName}"; if(ns.read(f)!==r) ns.write(f,r,'w');\nns.writePort(ns.pid,1);`;
+        `const f="${fName}"; if(ns.read(f)!==r) ns.write(f,r,'w')`;
     // Run the command with auto-retries if it fails
     const pid = await runCommand_Custom(ns, fnRun, commandToFile, fNameCommand, args, verbose, maxRetries, retryDelayMs, silent);
-    // Wait for the temp script to signal completion via port write (all port functions cost 0 RAM).
-    // 10s timeout in Promise.race handles the crash-before-port-write case; autoRetry below catches the stale-file result.
-    ns.clearPort(pid);
-    await Promise.race([ns.getPortHandle(pid).nextWrite(), ns.sleep(10_000)]);
+    // Wait for the process to complete. Note, as long as the above returned a pid, we don't actually have to check it, just the file contents
+    const fnIsAlive = (ignored_pid) => ns.read(fName) === initialContents;
+    await waitForProcessToComplete_Custom(ns, fnIsAlive, pid, verbose);
     if (verbose) log(ns, `Process ${pid} is done. Reading the contents of ${fName}...`);
     // Read the file, with auto-retries if it fails // TODO: Unsure reading a file can fail or needs retrying.
     let lastRead;
@@ -467,7 +466,7 @@ export async function waitForProcessToComplete_Custom(ns, fnIsAlive, pid, verbos
             break; // Script is done running
         }
         if (verbose && retries % 100 === 0) ns.print(`Waiting for pid ${pid} to complete... (${formatDuration(Date.now() - start)})`);
-        await ns.sleep(sleepMs);
+        await ns.sleep(sleepMs); // TODO: If we can switch to `await nextPortWrite(pid)` for signalling temp script completion, it would return faster.
         sleepMs = Math.min(sleepMs * 2, 200);
     }
     // Make sure that the process has shut down and we haven't just stopped retrying
@@ -681,6 +680,13 @@ export async function tryGetBitNodeMultipliers_Custom(ns, fnGetNsDataThroughFile
     if (canGetBitNodeMultipliers) {
         try {
             const mults = await fnGetNsDataThroughFile(ns, 'ns.getBitNodeMultipliers()', '/Temp/bitNode-multipliers.txt', null, null, null, null, /*silent:*/true);
+            // TODO: Remove after v3.0.0 is released on stable.
+            // If running an older version of the game, some property names need to be updated.
+            mults.FavorToDonateToFaction ??= mults.RepToDonateToFaction;
+            mults.CloudServerCost ??= mults.PurchasedServerCost;
+            mults.CloudServerSoftcap ??= mults.PurchasedServerSoftcap;
+            mults.CloudServerLimit ??= mults.PurchasedServerLimit;
+            mults.CloudServerMaxRam ??= mults.PurchasedServerMaxRam;
             return mults;
         } catch { }
     }
