@@ -215,18 +215,6 @@ function checkBackwardsCompatibility(ns, command) {
             `\nOriginal: ${command}` +
             `\n Updated: ${alteredCommand}`);
 
-    // Workaround for v2.3.0 deprecations. TODO: Remove when the warning is gone from all game versions
-    // Avoid serializing ns.getPlayer() properties that generate warnings. (This doesn't need to be logged)
-    if (command === "ns.getPlayer()")
-        alteredCommand = `( ()=> { let player = ns.getPlayer();
-            const excludeProperties = ['playtimeSinceLastAug', 'playtimeSinceLastBitnode', 'bitNodeN'];
-            return Object.keys(player).reduce((pCopy, key) => {
-                if (!excludeProperties.includes(key))
-                   pCopy[key] = player[key];
-                return pCopy;
-            }, {});
-        })()`;
-
     return alteredCommand;
 }
 
@@ -680,13 +668,6 @@ export async function tryGetBitNodeMultipliers_Custom(ns, fnGetNsDataThroughFile
     if (canGetBitNodeMultipliers) {
         try {
             const mults = await fnGetNsDataThroughFile(ns, 'ns.getBitNodeMultipliers()', '/Temp/bitNode-multipliers.txt', null, null, null, null, /*silent:*/true);
-            // TODO: Remove after v3.0.0 is released on stable.
-            // If running an older version of the game, some property names need to be updated.
-            mults.FavorToDonateToFaction ??= mults.RepToDonateToFaction;
-            mults.CloudServerCost ??= mults.PurchasedServerCost;
-            mults.CloudServerSoftcap ??= mults.PurchasedServerSoftcap;
-            mults.CloudServerLimit ??= mults.PurchasedServerLimit;
-            mults.CloudServerMaxRam ??= mults.PurchasedServerMaxRam;
             return mults;
         } catch { }
     }
