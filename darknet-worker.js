@@ -98,6 +98,15 @@ async function crawlNeighbors(ns, script, origin, interval, maxAttempts, verbose
     const knownPasswords = readKnownPasswords(ns);
     const neighbors = ns.dnet.probe(false).filter(server => server !== origin && server !== host);
 
+    let instability = { authenticationTimeoutChance: 0, authenticationDurationMultiplier: 1 };
+    try {
+        instability = ns.dnet.getDarknetInstability();
+    } catch {
+        // getDarknetInstability may not be available before full darknet access; ignore.
+    }
+    const highInstability = instability.authenticationTimeoutChance >= 0.5;
+    if (highInstability) ns.print(`INFO: Darknet instability high (timeout chance ${Math.round(instability.authenticationTimeoutChance * 100)}%). Skipping auth attempts this cycle.`);
+
     for (const target of neighbors) {
         let details;
         try {
@@ -115,7 +124,7 @@ async function crawlNeighbors(ns, script, origin, interval, maxAttempts, verbose
         }
 
         if (password == null) {
-            password = await solveAndAuthenticate(ns, target, details, maxAttempts, verboseTerminal);
+            password = await solveAndAuthenticate(ns, target, details, maxAttempts, verboseTerminal, highInstability);
             if (password == null) continue;
             knownPasswords[target] = password;
             writeKnownPasswords(ns, knownPasswords);
@@ -125,7 +134,8 @@ async function crawlNeighbors(ns, script, origin, interval, maxAttempts, verbose
     }
 }
 
-async function solveAndAuthenticate(ns, target, details, maxAttempts, verboseTerminal) {
+async function solveAndAuthenticate(ns, target, details, maxAttempts, verboseTerminal, skipAuth = false) {
+    if (skipAuth) return null;
     const candidates = buildCandidates(details).slice(0, maxAttempts);
     if (candidates.length === 0) {
         ns.print(`INFO: No solver yet for ${target} model=${details.modelId}`);
