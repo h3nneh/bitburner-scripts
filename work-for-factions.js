@@ -703,7 +703,7 @@ async function refreshNetburnersEligibility(ns) {
 async function earnFactionInvite(ns, factionName) {
     let player = await getPlayerInfo(ns);
     const joinedFactions = player.factions;
-    if (joinedFactions.includes(factionName)) return true;
+    if (joinedFactions.includes(factionName)) return "existing";
     if (!canPursueFaction(player, factionName)) {
         if (factionName == "Silhouette" && options['no-company-work'])
             return ns.print(`Deferring faction "Silhouette" because --no-company-work prevents earning its invite.`);
@@ -1664,9 +1664,10 @@ export async function workForSingleFaction(ns, factionName, forceThroughInvitePr
         `${startingFavor?.toFixed(2)}, Target Rep: ${Math.round(factionRepRequired).toLocaleString('en')}`);
     if (options['invites-only'])
         return ns.print(`--invites-only Skipping working for faction...`);
-    if (options['prioritize-invites'] && !shouldBypassPrioritizeInvitesForFaction(factionName) &&
+    if (options['prioritize-invites'] && inviteStatus !== "existing" &&
+        !shouldBypassPrioritizeInvitesForFaction(factionName) &&
         !forceThroughInvitePriority && !forceBestAug && !forceRep)
-        return ns.print(`--prioritize-invites Skipping working for faction for now...`);
+        return ns.print(`--prioritize-invites Skipping rep grind for newly-joined faction; collecting more invites first...`);
     let lastStatusUpdateTime = 0;
     let lastSelectedInfiltrationTarget = "";
     let stickyInfiltrationTarget = "";
