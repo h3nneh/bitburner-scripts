@@ -182,15 +182,11 @@ export async function main(ns) {
         lastMoney = money;
     }
 
-    // TODO STEP 11: Accept any outstanding faction invitations, and claim our +1 free favour if available.
-    /*
-    const factionInvites = ns.singularity.checkFactionInvitations()
-    if (factionInvites.length > 0)
-        factionInvites.forEach(factionName => ns.singularity.joinFaction(factionName));
-    if (ns.singularity.exportGameBonus())
-        ns.singularity.exportGame();
-    // TODO: No way to close the pop-up save dialog, which is a deal-breaker for me.
-    */
+    // STEP 11: Claim the +1 faction favor export bonus if available (triggers a browser save-file download)
+    if (await getNsDataThroughFile(ns, 'ns.singularity.exportGameBonus()')) {
+        pid = await runCommand(ns, 'await ns.singularity.exportGame()', '/Temp/export-game.js');
+        await waitForProcessToComplete(ns, pid, true);
+    }
 
     if (!options['skip-faction-manager-purchase']) {
         // STEP 4 REDUX: If somehow we have money left over and can afford some junk augs that weren't on our desired list, grab them too
