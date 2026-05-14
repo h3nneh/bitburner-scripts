@@ -133,6 +133,10 @@ export async function main(ns) {
         });
     // The best server's gain rate will be used to pro-rate the relative gain of servers that haven't been unlocked yet (if they were unlocked at this level)
     const best_unlocked_server = unlocked_servers.sort((a, b) => b.gainRate - a.gainRate)[0];
+    if (!best_unlocked_server) {
+        ns.print("No rooted, money-bearing servers are currently unlocked at this hacking level.");
+        return;
+    }
     ns.print("Best unlocked server: ", best_unlocked_server.hostname, " with ", formatMoney(best_unlocked_server.gainRate), " per ram-second");
     // Compute locked server's gain rates (pro rated back to the current player's hack level)
     const locked_servers = servers.filter(s => s.requiredHackingSkill > player.skills.hacking).sort((a, b) => a.requiredHackingSkill - b.requiredHackingSkill)
