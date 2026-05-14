@@ -55,7 +55,7 @@ export async function main(ns) {
     while (true) {
         try {
             await openLocalCaches(ns);
-            tryStasisLink(ns, String(options.origin));
+            // tryStasisLink(ns, String(options.origin));
             await freeLocalBlockedRam(ns);
             if (!options["disable-phishing"]) await tryPhishing(ns);
             await crawlNeighbors(ns, script, String(options.origin), interval, maxAttempts, options["verbose-terminal"]);
@@ -405,29 +405,29 @@ function terminalLog(ns, verboseTerminal, message) {
     else ns.print(message);
 }
 
-let stasisLinkInFlight = false;
+// let stasisLinkInFlight = false;
 
-function tryStasisLink(ns, origin) {
-    const host = ns.getHostname();
-    if (host === "darkweb" || host === origin) return;
-    if (ns.getServerMaxRam(host) < 256) return;
-    if (stasisLinkInFlight) return;
-    try {
-        const linked = ns.dnet.getStasisLinkedServers();
-        if (linked.includes(host)) return;
-        stasisLinkInFlight = true;
-        ns.dnet.setStasisLink(true).then(result => {
-            stasisLinkInFlight = false;
-            if (result.success) ns.print(`SUCCESS: Stasis-linked ${host}.`);
-            else ns.print(`INFO: Stasis link on ${host} failed: ${result.message}`);
-        }).catch(err => {
-            stasisLinkInFlight = false;
-            ns.print(`WARN: Stasis link error on ${host}: ${formatError(err)}`);
-        });
-    } catch (err) {
-        ns.print(`WARN: Could not initiate stasis link on ${host}: ${formatError(err)}`);
-    }
-}
+// function tryStasisLink(ns, origin) {
+//     const host = ns.getHostname();
+//     if (host === "darkweb" || host === origin) return;
+//     if (ns.getServerMaxRam(host) < 256) return;
+//     if (stasisLinkInFlight) return;
+//     try {
+//         const linked = ns.dnet.getStasisLinkedServers();
+//         if (linked.includes(host)) return;
+//         stasisLinkInFlight = true;
+//         ns.dnet.setStasisLink(true).then(result => {
+//             stasisLinkInFlight = false;
+//             if (result.success) ns.print(`SUCCESS: Stasis-linked ${host}.`);
+//             else ns.print(`INFO: Stasis link on ${host} failed: ${result.message}`);
+//         }).catch(err => {
+//             stasisLinkInFlight = false;
+//             ns.print(`WARN: Stasis link error on ${host}: ${formatError(err)}`);
+//         });
+//     } catch (err) {
+//         ns.print(`WARN: Could not initiate stasis link on ${host}: ${formatError(err)}`);
+//     }
+// }
 
 async function tryInduceMigration(ns, target) {
     try {
