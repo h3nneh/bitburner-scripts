@@ -101,7 +101,7 @@ async function crawlNeighbors(ns, script, origin, interval, maxAttempts, verbose
     for (const target of neighbors) {
         let details;
         try {
-            details = ns.dnet.getServerAuthDetails(target);
+            details = ns.dnet.getServerDetails(target);
         } catch (error) {
             ns.print(`WARN: Cannot inspect ${target}: ${formatError(error)}`);
             continue;
