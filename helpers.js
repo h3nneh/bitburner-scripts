@@ -215,6 +215,18 @@ function checkBackwardsCompatibility(ns, command) {
             `\nOriginal: ${command}` +
             `\n Updated: ${alteredCommand}`);
 
+    // Workaround for v2.3.0 deprecations. TODO: Remove when the warning is gone from all game versions
+    // Avoid serializing ns.getPlayer() properties that generate warnings. (This doesn't need to be logged)
+    if (command === "ns.getPlayer()")
+        alteredCommand = `( ()=> { let player = ns.getPlayer();
+            const excludeProperties = ['playtimeSinceLastAug', 'playtimeSinceLastBitnode', 'bitNodeN'];
+            return Object.keys(player).reduce((pCopy, key) => {
+                if (!excludeProperties.includes(key))
+                   pCopy[key] = player[key];
+                return pCopy;
+            }, {});
+        })()`;
+
     return alteredCommand;
 }
 
