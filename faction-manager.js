@@ -12,7 +12,7 @@ const easyAccessFactions = [
     "Tian Di Hui", "Sector-12", "Chongqing", "New Tokyo", "Ishima", "Aevum", "Volhaven", // Location-Based
     "BitRunners", "CyberSec", "NiteSec", /* Hack Based */ "Netburners", /* Hacknet-based */ "Slum Snakes", "Tetrads", /* Early Crime */
 ];
-const default_priority_augs = ["The Red Pill", "The Blade's Simulacrum", "Neuroreceptor Management Implant"]; // By default, take these augs when they are accessible
+const default_priority_augs = ["The Red Pill", "The Blade's Simulacrum", "Neuroreceptor Management Implant", "SoA - phyzical WKS harmonizer"]; // By default, take these augs when they are accessible
 const augCashRoot = "CashRoot Starter Kit";
 const default_desired_augs = [augCashRoot] // By default, mark these augs as "desired" regardless of their stats
 // If not in a gang, and we are nearing unlocking gangs (54K Karma) we will attempt to join any/all of these factions
