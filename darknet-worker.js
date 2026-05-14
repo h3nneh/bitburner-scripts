@@ -108,6 +108,8 @@ async function crawlNeighbors(ns, script, origin, interval, maxAttempts, verbose
     const highInstability = instability.authenticationTimeoutChance >= 0.5;
     if (highInstability) ns.print(`INFO: Darknet instability high (timeout chance ${Math.round(instability.authenticationTimeoutChance * 100)}%). Skipping auth attempts this cycle.`);
 
+    let migratedOneThisCycle = false;
+
     for (const target of neighbors) {
         let details;
         try {
@@ -132,6 +134,11 @@ async function crawlNeighbors(ns, script, origin, interval, maxAttempts, verbose
         }
 
         await spreadToNeighbor(ns, script, target, password, interval, verboseTerminal);
+
+        if (!migratedOneThisCycle && !highInstability && !details.isStationary) {
+            await tryInduceMigration(ns, target);
+            migratedOneThisCycle = true;
+        }
     }
 }
 
@@ -419,6 +426,16 @@ function tryStasisLink(ns, origin) {
         });
     } catch (err) {
         ns.print(`WARN: Could not initiate stasis link on ${host}: ${formatError(err)}`);
+    }
+}
+
+async function tryInduceMigration(ns, target) {
+    try {
+        const result = await ns.dnet.induceServerMigration(target);
+        if (result.success) ns.print(`INFO: Charged migration on ${target}.`);
+        else ns.print(`INFO: Migration charge on ${target} failed: ${result.message}`);
+    } catch (err) {
+        ns.print(`WARN: induceServerMigration error on ${target}: ${formatError(err)}`);
     }
 }
 
