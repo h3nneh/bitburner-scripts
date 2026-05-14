@@ -134,8 +134,11 @@ async function crawlNeighbors(ns, script, origin, interval, maxAttempts, verbose
     }
 }
 
-async function solveAndAuthenticate(ns, target, details, maxAttempts, verboseTerminal, skipAuth = false) {
-    if (skipAuth) return null;
+async function solveAndAuthenticate(ns, target, details, maxAttempts, verboseTerminal, skipAuthAttempts = false) {
+    if (skipAuthAttempts) {
+        ns.print(`INFO: Skipping auth attempts for ${target} (high instability).`);
+        return null;
+    }
     const candidates = buildCandidates(details).slice(0, maxAttempts);
     if (candidates.length === 0) {
         ns.print(`INFO: No solver yet for ${target} model=${details.modelId}`);
