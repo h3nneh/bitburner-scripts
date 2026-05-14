@@ -1,3 +1,4 @@
+// Based on: https://github.com/66Ton99/bitburner-scripts/blob/main/host-manager.js
 import { log, getConfiguration, instanceCount, getNsDataThroughFile, formatMoney, formatRam, formatDuration } from './helpers.js'
 
 // The purpose of the host manager is to buy the best servers it can
@@ -17,8 +18,7 @@ let budget;
 
 let options;
 const argsSchema = [
-    ['c', false], // Set to true to run continuously
-    ['run-continuously', false], // Long-form alias for above flag
+    ['run-continuously', false], // Set to true to run continuously
     ['interval', 10000], // Update interval (in milliseconds) when running continuously
     ['min-ram-exponent', 5], // the minimum amount of ram to purchase
     ['utilization-trigger', 0.80], // the percentage utilization that will trigger an attempted purchase
@@ -60,7 +60,7 @@ export async function main(ns) {
     // Gather one-time info in advance about how much RAM each size of server costs (Up to 2^30 to be future-proof, but we expect everything above 2^20 to be Infinity)
     costByRamExponent = await getNsDataThroughFile(ns, 'Object.fromEntries([...Array(30).keys()].map(i => [i, ns.cloud.getServerCost(2**i)]))', '/Temp/host-costs.txt');
 
-    keepRunning = options.c || options['run-continuously'];
+    keepRunning = options['run-continuously'];
     pctReservedMoney = options['reserve-percent'];
     minRamExponent = options['min-ram-exponent'];
     budget = options['budget'];
@@ -86,7 +86,7 @@ export async function main(ns) {
             `This means we will spend no more than ${((1 - pctReservedMoney) * 100).toFixed(1)}% of current Money on a new server.`);
     // Start the main loop (or run once)
     if (!keepRunning)
-        log(ns, `host-manager will run once. Run with argument "-c" to run continuously.`)
+        log(ns, `host-manager will run once. Run with argument "--run-continuously" to run continuously.`)
     do {
         absReservedMoney = options['absolute-reserve'] != null ? Number(options['absolute-reserve']) : Number(ns.read("reserve.txt") || 0);
         await tryToBuyBestServerPossible(ns);

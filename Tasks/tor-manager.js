@@ -1,3 +1,4 @@
+// Based on: https://github.com/66Ton99/bitburner-scripts/blob/main/Tasks/tor-manager.js
 /** @param {NS} ns
  * the purpose of tor-manager is to buy the TOR router ASAP
  * so that another script can buy the port breakers. This script

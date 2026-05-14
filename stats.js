@@ -1,3 +1,4 @@
+// Based on: https://github.com/66Ton99/bitburner-scripts/blob/main/stats.js
 import {
     log, disableLogs, instanceCount, getConfiguration, getNsDataThroughFile, getActiveSourceFiles,
     getStocksValue, formatNumberShort, formatMoney, formatRam, getFilePath
@@ -148,7 +149,7 @@ async function getHudData(ns, bitNode, dictSourceFiles, options) {
                 const spendHashesScript = getFilePath('spend-hacknet-hashes.js');
                 const liquidatingHashes = await (/**@returns{Promise<ProcessInfo[]>}*/async () =>
                     await getNsDataThroughFile(ns,
-                        `ns.ps('home').filter(p => p.filename == ns.args[0] && (p.args.includes('--liquidate') || p.args.includes('-l')))`,
+                        `ns.ps('home').filter(p => p.filename == ns.args[0] && p.args.includes('--liquidate'))`,
                         '/Temp/hash-liquidation-scripts.txt', [spendHashesScript])
                 )();
                 if (liquidatingHashes.length > 0)
@@ -315,8 +316,8 @@ async function getHudData(ns, bitNode, dictSourceFiles, options) {
         // Bitburner bug: Trace amounts of share power sometimes left over after we stop sharing
         if (sharePower > 1.0001) {
             val.push(true, formatNumberShort(sharePower, 3, 2),
-                "Uses RAM to boost faction reputation gain rate while working for factions (tapers off at ~1.65) " +
-                "\nRun `daemon.js` with the `--no-share` flag to disable.");
+                "Uses RAM to boost faction reputation gain rate while working for factions (tapers off at ~1.65). " +
+                "Current daemon/hack orchestration does not schedule share work.");
         } else val.push(false)
         hudData.push(val)
     }

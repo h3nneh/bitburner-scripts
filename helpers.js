@@ -1,3 +1,5 @@
+// Based on: https://github.com/66Ton99/bitburner-scripts/blob/main/helpers.js
+// Local change: BN14 cheat fix (dictSourceFiles[14] level adjustment when in BN14)
 /**
  * Return a formatted representation of the monetary amount using scale symbols (e.g. $6.50M)
  * @param {number} num - The number to format
@@ -7,6 +9,28 @@
 export function formatMoney(num, maxSignificantFigures = 6, maxDecimalPlaces = 3) {
     let numberShort = formatNumberShort(num, maxSignificantFigures, maxDecimalPlaces);
     return num >= 0 ? "$" + numberShort : numberShort.replace("-", "-$");
+}
+
+export function isDevToolsOpen() {
+    try {
+        // Avoid a direct "window" reference so importing helpers.js does not incur DOM RAM cost.
+        const wnd = eval("window");
+        if (!wnd) return false;
+        const widthGap = Math.abs((wnd.outerWidth || 0) - (wnd.innerWidth || 0));
+        const heightGap = Math.abs((wnd.outerHeight || 0) - (wnd.innerHeight || 0));
+        return widthGap > 160 || heightGap > 160;
+    } catch {
+        return false;
+    }
+}
+
+export function devConsole(method, ...args) {
+    if (!isDevToolsOpen()) return;
+    try {
+        const consoleRef = globalThis.console;
+        const fn = consoleRef?.[method];
+        if (typeof fn === "function") fn(...args);
+    } catch { }
 }
 
 const symbols = ["", "k", "m", "b", "t", "q", "Q", "s", "S", "o", "n", "e33", "e36", "e39"];
@@ -19,7 +43,7 @@ const symbols = ["", "k", "m", "b", "t", "q", "Q", "s", "S", "o", "n", "e33", "e
  **/
 export function formatNumberShort(num, maxSignificantFigures = 6, maxDecimalPlaces = 3) {
     if (typeof num !== "number") {
-        console.warn(`formatNumberShort called with "num" set to a non-numeric "${typeof num}" value ${JSON.stringify(num)}`);
+        devConsole('warn', `formatNumberShort called with "num" set to a non-numeric "${typeof num}" value ${JSON.stringify(num)}`);
         num = Number(num);
     }
     if (Math.abs(num) > 10 ** (3 * symbols.length)) // If we've exceeded our max symbol, switch to exponential notation
@@ -183,8 +207,7 @@ function checkBackwardsCompatibility(ns, command) {
         .replaceAll("cloud.deleteServer", "deleteServer")
         .replaceAll("cloud.getServerNames", "getPurchasedServers")
         .replaceAll("cloud.getServerLimit", "getPurchasedServerLimit")
-        .replaceAll("cloud.getRamLimit", "getPurchasedServerMaxRam")
-        .replaceAll("getAllGangInformation", "getOtherGangInformation");
+        .replaceAll("cloud.getRamLimit", "getPurchasedServerMaxRam");
 
     // Log altered commands to assist with troubleshooting.
     if (alteredCommand != command)
@@ -620,10 +643,10 @@ export async function getActiveSourceFiles_Custom(ns, fnGetNsDataThroughFile, in
         // TODO: This is true of some BNs (BN4), but not others (BN14.2), Check them all!
         let effectiveSfLevel = [4, 8].includes(resetInfo.currentNode) ? 3 : 1;
         dictSourceFiles[resetInfo.currentNode] = Math.max(effectiveSfLevel, dictSourceFiles[resetInfo.currentNode] || 0);
-    }
-
-    if (dictSourceFiles[14] === 1 && resetInfo.currentNode === 14) {
-      dictSourceFiles[14] = 2;
+        // BN14 cheat: being in BN14 with level 1 counts as level 2 for all practical purposes
+        if (dictSourceFiles[14] === 1 && resetInfo.currentNode === 14) {
+            dictSourceFiles[14] = 2;
+        }
     }
 
     // If any bitNodeOptions were set, it might reduce our source file levels for gameplay purposes,
@@ -944,11 +967,11 @@ export function tail(ns, processId = undefined) {
         return //ns.tprint(`PID was previously moved ${processId}`);
     // By default, make all tail windows take up 75% of the width, 25% of the height available
     const [width, height] = ns.ui.windowSize();
-    ns.ui.resizeTail(width * 0.30, height * 0.2, processId);
+    ns.ui.resizeTail(width * 0.60, height * 0.25, processId);
     // Cascade windows: After each tail, shift the window slightly down and over so that they don't overlap
     let offsetPct = ((((tailedPids.length % 30.0) / 30.0) + tailedPids.length) % 6.0) / 6.0;
     ns.print(width, ' ', height, ' ', processId, ' ', offsetPct, ' ', tailedPids)
-    ns.ui.moveTail(offsetPct * (width * 0.2 - 300) + 250, offsetPct * (height * 0.75 - 100) + 50, processId);
+    ns.ui.moveTail(offsetPct * (width * 0.25 - 300) + 250, offsetPct * (height * 0.75 - 100) + 50, processId);
     tailedPids.push(processId);
     ns.write(tailFile, JSON.stringify(tailedPids), 'w');
 }
@@ -959,7 +982,7 @@ function isV3(ns) {
 
 export function formatTime(ns, milliseconds, milliPrecision) {
     if (isV3(ns)) {
-        return ns.ui.time(milliseconds, milliPrecision);
+        return ns.format.time(milliseconds, milliPrecision);
     }
     return ns.tFormat(milliseconds, milliPrecision);
 }

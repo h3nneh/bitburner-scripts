@@ -1,3 +1,4 @@
+// Based on: https://github.com/66Ton99/bitburner-scripts/blob/main/Tasks/program-manager.js
 /** @param {NS} ns
  * the purpose of the program-manager is to buy all the programs
  * from the darkweb we can afford so we don't have to do it manually
@@ -11,12 +12,14 @@ export async function main(ns) {
     if (!keepRunning)
         ns.print(`program-manager will run once. Run with argument "-c" to run continuously.`)
 
+    let foundMissingProgram;
     do {
-        let foundMissingProgram = false;
+        foundMissingProgram = false;
         for (const prog of programNames) {
-            if (!ns.fileExists(prog, "home") && ns.singularity.purchaseProgram(prog))
+            if (ns.fileExists(prog, "home")) continue;
+            if (ns.singularity.purchaseProgram(prog))
                 ns.toast(`Purchased ${prog}`, 'success');
-            else if (keepRunning)
+            else
                 foundMissingProgram = true;
         }
         if (keepRunning && foundMissingProgram)

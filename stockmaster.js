@@ -1,3 +1,4 @@
+// Based on: https://github.com/66Ton99/bitburner-scripts/blob/main/stockmaster.js
 import {
     instanceCount, getConfiguration, getNsDataThroughFile, runCommand, getActiveSourceFiles, tryGetBitNodeMultipliers,
     formatMoney, formatNumberShort, formatDuration, getStockSymbols
@@ -31,11 +32,14 @@ let lastTick = 0;
 let sleepInterval = 1000;
 let resetInfo = (/**@returns{ResetInfo}*/() => undefined)(); // Information about the current bitnode
 let bitNodeMults = (/**@returns{BitNodeMultipliers}*/() => undefined)();
+const liquidationPauseFile = "/Temp/stockmaster-liquidation-pause.txt";
 
 let options;
 const argsSchema = [
-    ['l', false], // Stop any other running stockmaster.js instances and sell all stocks
-    ['liquidate', false], // Long-form alias for the above flag.
+    ['liquidate', false], // Sell all stocks. In BN8, keeps the live trader alive unless --kill-trader is set.
+    ['keep-trader', false], // Liquidate positions without killing an existing trading instance, preserving pre-4S history.
+    ['kill-trader', false], // Force --liquidate to kill an existing trading instance, even where keep-trader would be preferred.
+    ['liquidation-pause-ms', 10000], // When keeping the trader alive, pause new purchases this long after liquidation.
     ['mock', false], // If set to true, will "mock" buy/sell but not actually buy/sell anything
     ['noisy', false], // If set to true, tprints and announces each time stocks are bought/sold
     ['disable-shorts', false], // If set to true, will not short any stocks. Will be set depending on having SF8.2 by default.
@@ -75,11 +79,19 @@ export async function main(ns) {
     // If given the "liquidate" command, try to kill any versions of this script trading in stocks
     // NOTE: We must do this immediately before we start resetting / overwriting global state below (which is shared between script instances)
     const hasTixApiAccess = await getNsDataThroughFile(ns, 'ns.stock.hasTixApiAccess()');
-    if (runOptions.l || runOptions.liquidate) {
+    if (runOptions.liquidate) {
         if (!hasTixApiAccess) return log(ns, 'ERROR: Cannot liquidate stocks because we do not have Tix Api Access', true, 'error');
-        log(ns, 'INFO: Killing any other stockmaster processes...', false, 'info');
-        await runCommand(ns, `ns.ps().filter(proc => proc.filename == '${ns.getScriptName()}' && !proc.args.includes('-l') && !proc.args.includes('--liquidate'))` +
-            `.forEach(proc => ns.kill(proc.pid))`, '/Temp/kill-stockmarket-scripts.js');
+        const currentResetInfo = await getNsDataThroughFile(ns, 'ns.getResetInfo()');
+        const keepTrader = runOptions['keep-trader'] || (!runOptions['kill-trader'] && currentResetInfo.currentNode == 8);
+        if (keepTrader) {
+            const pauseUntil = Date.now() + Math.max(0, Number(runOptions['liquidation-pause-ms']) || 0);
+            await ns.write(liquidationPauseFile, String(pauseUntil), 'w');
+            log(ns, `INFO: Keeping existing stockmaster trader alive and pausing new purchases for ${formatDuration(pauseUntil - Date.now())}.`, false, 'info');
+        } else {
+            log(ns, 'INFO: Killing any other stockmaster processes...', false, 'info');
+            await runCommand(ns, `ns.ps().filter(proc => proc.filename == '${ns.getScriptName()}' && !proc.args.includes('--liquidate'))` +
+                `.forEach(proc => ns.kill(proc.pid))`, '/Temp/kill-stockmarket-scripts.js');
+        }
         log(ns, 'INFO: Checking for and liquidating any stocks...', false, 'info');
         await liquidate(ns); // Sell all stocks
         return;
@@ -188,6 +200,12 @@ export async function main(ns) {
                 }
             }
             if (sales > 0) continue; // If we sold anything, loop immediately (no need to sleep) and refresh stats immediately before making purchasing decisions.
+            const liquidationPauseUntil = Number(ns.read(liquidationPauseFile) || 0);
+            if (Date.now() < liquidationPauseUntil) {
+                log(ns, `Pausing new stock purchases for ${formatDuration(liquidationPauseUntil - Date.now())} after liquidation...`);
+                await ns.sleep(Math.min(sleepInterval, liquidationPauseUntil - Date.now()));
+                continue;
+            }
 
             // If we haven't gone above a certain liquidity threshold, don't attempt to buy more stock
             // Avoids death-by-a-thousand-commissions before we get super-rich, stocks are capped, and this is no longer an issue
@@ -486,26 +504,35 @@ async function doBuy(ns, stk, sharesToBuy) {
 /** @param {NS} ns
  * Sell our current position in this stock. */
 async function doSellAll(ns, stk) {
-    let long = stk.sharesLong > 0;
-    if (long && stk.sharesShort > 0) // Detect any issues here - we should always sell one before buying the other.
-        log(ns, `ERROR: Somehow ended up both ${stk.sharesShort} short and ${stk.sharesLong} long on ${stk.sym}`, true, 'error');
+    if (stk.sharesLong > 0 && stk.sharesShort > 0)
+        log(ns, `WARNING: Found both ${stk.sharesShort} short and ${stk.sharesLong} long on ${stk.sym}. Closing both positions.`, true, 'warning');
+    let revenue = 0;
+    if (stk.sharesLong > 0)
+        revenue += await doSellPosition(ns, stk, true);
+    if (stk.sharesShort > 0)
+        revenue += await doSellPosition(ns, stk, false);
+    return revenue;
+}
+
+/** @param {NS} ns */
+async function doSellPosition(ns, stk, long) {
     let expectedPrice = long ? stk.bid_price : stk.ask_price; // Depends on whether we will be selling a long or short position
     let sharesSold = long ? stk.sharesLong : stk.sharesShort;
     let price = mock ? expectedPrice : await transactStock(ns, stk.sym, sharesSold, long ? 'sellStock' : 'sellShort');
-    const profit = (long ? stk.sharesLong * (price - stk.boughtPrice) : stk.sharesShort * (stk.boughtPriceShort - price)) - 2 * commission;
-    log(ns, `${profit > 0 ? 'SUCCESS' : 'WARNING'}: Sold all ${formatNumberShort(sharesSold, 3, 3).padStart(5)} ${stk.sym.padEnd(5)} ${long ? ' long' : 'short'} positions ` +
-        `@ ${formatMoney(price).padStart(9)} for a ` + (profit > 0 ? `PROFIT of ${formatMoney(profit).padStart(9)}` : ` LOSS  of ${formatMoney(-profit).padStart(9)}`) + ` after ${stk.ticksHeld} ticks`,
-        noisy, noisy ? (profit > 0 ? 'success' : 'error') : undefined);
     if (price == 0) {
         log(ns, `ERROR: Failed to sell ${sharesSold} ${stk.sym} ${long ? 'shares' : 'shorts'} @ ${formatMoney(expectedPrice)} - 0 was returned.`, true, 'error');
         return 0;
     } else if (price != expectedPrice) {
         log(ns, `WARNING: Sold ${stk.sym} ${long ? 'shares' : 'shorts'} @ ${formatMoney(price)} but expected ${formatMoney(expectedPrice)} (spread: ${formatMoney(stk.spread)})`, false, 'warning');
-        price = expectedPrice; // Known Bitburner bug for now, sellSort returns "price" instead of "ask_price". Correct this so running profit calcs are correct.
+        price = expectedPrice; // Known Bitburner bug for now, sellShort returns "price" instead of "ask_price". Correct this so running profit calcs are correct.
     }
+    const profit = (long ? sharesSold * (price - stk.boughtPrice) : sharesSold * (stk.boughtPriceShort - price)) - 2 * commission;
+    log(ns, `${profit > 0 ? 'SUCCESS' : 'WARNING'}: Sold all ${formatNumberShort(sharesSold, 3, 3).padStart(5)} ${stk.sym.padEnd(5)} ${long ? ' long' : 'short'} positions ` +
+        `@ ${formatMoney(price).padStart(9)} for a ` + (profit > 0 ? `PROFIT of ${formatMoney(profit).padStart(9)}` : ` LOSS  of ${formatMoney(-profit).padStart(9)}`) + ` after ${stk.ticksHeld} ticks`,
+        noisy, noisy ? (profit > 0 ? 'success' : 'error') : undefined);
     if (long) stk.sharesLong -= sharesSold; else stk.sharesShort -= sharesSold; // Maintained for mock mode, otherwise, redundant (overwritten at next refresh)
     totalProfit += profit;
-    return price * sharesSold - commission; // Return the amount of money recieved from the transaction
+    return (long ? price : 2 * stk.boughtPriceShort - price) * sharesSold - commission; // Return the amount of money recieved from the transaction
 }
 
 let formatBP = fraction => formatNumberShort(fraction * 100 * 100, 3, 2) + " BP";

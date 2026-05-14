@@ -1,3 +1,4 @@
+// Based on: https://github.com/66Ton99/bitburner-scripts/blob/main/Remote/weak-target.js
 /** @param {NS} ns
  * Wait until an appointed time and then execute a weaken. */
 export async function main(ns) {
@@ -11,11 +12,12 @@ export async function main(ns) {
         /*args[4]*/ silentMisfires = false,
         /*args[5]*/ loopingMode = false
     ] = ns.args;
+    const suppressMisfireToasts = silentMisfires || description == "weakenForXp";
 
     // We may need to sleep before we start the operation to align ourselves properly with other batch cycle (HGW) operations
     let sleepDuration = start_time - Date.now();
     if (sleepDuration < 0) {
-        if (!silentMisfires)
+        if (!suppressMisfireToasts)
             ns.toast(`Misfire: Weaken started ${-sleepDuration} ms too late. ${JSON.stringify(ns.args)}`, 'warning');
         sleepDuration = 0;
     }
@@ -28,7 +30,7 @@ export async function main(ns) {
     do {
         const weakAmt = await ns.weaken(target, hgwOptions);
         // If enabled, warn of any misfires
-        if (weakAmt == 0 && !silentMisfires)
+        if (weakAmt == 0 && !suppressMisfireToasts)
             ns.toast(`Misfire: Weaken achieved no security reduction. ${JSON.stringify(ns.args)}`, 'warning');
         // (looping mode only) After the first loop, remove the initial sleep time used to align our start with other HGW operations
         if (firstLoop) {

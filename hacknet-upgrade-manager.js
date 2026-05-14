@@ -1,11 +1,11 @@
+// Based on: https://github.com/66Ton99/bitburner-scripts/blob/main/hacknet-upgrade-manager.js
 import { getConfiguration, disableLogs, formatDuration, formatMoney, } from './helpers.js'
 
 let haveHacknetServers = true; // Cached flag after detecting whether we do (or don't) have hacknet servers
 const argsSchema = [
     ['max-payoff-time', '1h'], // Controls how far to upgrade hacknets. Can be a number of seconds, or an expression of minutes/hours (e.g. '123m', '4h')
     ['time', null], // alias for max-payoff-time
-    ['c', false], // Set to true to run continuously, otherwise, it runs once
-    ['continuous', false],
+    ['continuous', false], // Set to true to run continuously, otherwise, it runs once
     ['interval', 1000], // Rate at which the program purchases upgrades when running continuously
     ['max-spend', Number.MAX_VALUE], // The maximum amount of money to spend on upgrades
     ['toast', false], // Set to true to toast purchases
@@ -22,7 +22,7 @@ export function autocomplete(data, _) {
 export async function main(ns) {
     const options = getConfiguration(ns, argsSchema);
     if (!options) return; // Invalid options, or ran in --help mode.
-    const continuous = options.c || options.continuous;
+    const continuous = options.continuous;
     const interval = options.interval;
     let maxSpend = options["max-spend"];
     let maxPayoffTime = options['time'] || options['max-payoff-time'];

@@ -1,3 +1,4 @@
+// Based on: https://github.com/66Ton99/bitburner-scripts/blob/main/Tasks/crack-host.js
 /** @param {NS} ns
  * Blindly try to open all ports and crack the specified target, regardless of owned tools. */
 export async function main(ns) {

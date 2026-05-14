@@ -1,3 +1,4 @@
+// Based on: https://github.com/66Ton99/bitburner-scripts/blob/main/Tasks/contractor.js
 import { instanceCount, getFilePath, getNsDataThroughFile, disableLogs, log } from '../helpers.js'
 const scriptSolver = getFilePath("/Tasks/contractor.js.solver.js");
 

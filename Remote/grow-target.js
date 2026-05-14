@@ -1,3 +1,4 @@
+// Based on: https://github.com/66Ton99/bitburner-scripts/blob/main/Remote/grow-target.js
 /** @param {NS} ns
  * Wait until an appointed time and then execute a grow. */
 export async function main(ns) {
@@ -11,11 +12,12 @@ export async function main(ns) {
         /*args[5]*/ silentMisfires = false,
         /*args[6]*/ loopingMode = false
     ] = ns.args;
+    const suppressMisfireToasts = silentMisfires || description == "growForXp";
 
     // We may need to sleep before we start the operation to align ourselves properly with other batch cycle (HGW) operations
     let sleepDuration = start_time - Date.now();
     if (sleepDuration < 0) {
-        if (!silentMisfires)
+        if (!suppressMisfireToasts)
             ns.toast(`Misfire: Grow started ${-sleepDuration} ms too late. ${JSON.stringify(ns.args)}`, 'warning');
         sleepDuration = 0;
     }
@@ -33,7 +35,7 @@ export async function main(ns) {
     do {
         const growPct = await ns.grow(target, hgwOptions);
         // If enabled, warn of any misfires
-        if (growPct == 0 && !silentMisfires)
+        if (growPct == 0 && !suppressMisfireToasts)
             ns.toast(`Misfire: Grow achieved no growth. ${JSON.stringify(ns.args)}`, 'warning');
         // (looping mode only) After the first loop, remove the initial sleep time used to align our start with other HGW operations
         if (firstLoop) {

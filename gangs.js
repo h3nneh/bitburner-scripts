@@ -1,3 +1,4 @@
+// Based on: https://github.com/66Ton99/bitburner-scripts/blob/main/gangs.js
 import {
     log, getConfiguration, instanceCount, getNsDataThroughFile, getActiveSourceFiles, runCommand, tryGetBitNodeMultipliers,
     formatMoney, formatNumberShort, formatDuration
@@ -192,7 +193,7 @@ async function mainLoop(ns) {
     const myGangInfo = await getNsDataThroughFile(ns, 'ns.gang.getGangInformation()');
     const thisLoopStart = Date.now();
     if (!territoryTickDetected) { // Detect the first territory tick by watching for other gang's territory power to update.
-        const otherGangInfo = await getNsDataThroughFile(ns, 'ns.gang.getAllGangInformation()'); // Returns dict of { [gangName]: { "power": Number, "territory": Number } }
+        const otherGangInfo = await getOtherGangInformation(ns); // Returns dict of { [gangName]: { "power": Number, "territory": Number } }
         if (lastOtherGangInfo != null && JSON.stringify(otherGangInfo) != JSON.stringify(lastOtherGangInfo)) {
             territoryNextTick = lastLoopTime + territoryTickTime;
             territoryTickDetected = true;
@@ -212,8 +213,10 @@ async function mainLoop(ns) {
         await onTerritoryTick(ns, myGangInfo); //Do most things only once per territory tick
         isReadyForNextTerritoryTick = false;
         lastTerritoryPower = myGangInfo.power;
-    } else if (isReadyForNextTerritoryTick)
-        log(ns, `INFO: Waiting for territory to tick. (Waiting for gang power to change from ${formatNumberShort(lastTerritoryPower)}. ETA: ${formatDuration(territoryNextTick - thisLoopStart)}`);
+    } else if (isReadyForNextTerritoryTick) {
+        const previousPower = lastTerritoryPower == null ? "unknown" : formatNumberShort(lastTerritoryPower);
+        log(ns, `INFO: Waiting for territory to tick. (Waiting for gang power to change from ${previousPower}. ETA: ${formatDuration(territoryNextTick - thisLoopStart)}`);
+    }
     lastLoopTime = thisLoopStart; // Due to periodic lag, we must track the last time we checked, can't assume it was `updateInterval` ago.
 }
 
@@ -222,7 +225,8 @@ async function mainLoop(ns) {
 async function onTerritoryTick(ns, myGangInfo) {
     territoryNextTick = lastLoopTime + territoryTickTime / (ns.gang.getBonusTime() > 0 ? 5 : 1); // Reset the time the next tick will occur
     if (lastTerritoryPower != myGangInfo.power || lastTerritoryPower == null) {
-        log(ns, `Territory power updated from ${formatNumberShort(lastTerritoryPower)} to ${formatNumberShort(myGangInfo.power)}.`)
+        const previousPower = lastTerritoryPower == null ? "unknown" : formatNumberShort(lastTerritoryPower);
+        log(ns, `Territory power updated from ${previousPower} to ${formatNumberShort(myGangInfo.power)}.`)
         consecutiveTerritoryDetections++;
         if (consecutiveTerritoryDetections > 5 && territoryTickWaitPadding > updateInterval)
             territoryTickWaitPadding = Math.max(updateInterval, territoryTickWaitPadding - updateInterval);
@@ -433,14 +437,24 @@ async function tryUpgradeMembers(ns, dictMembers) {
     const playerData = await getNsDataThroughFile(ns, 'ns.getPlayer()');
     const homeMoney = playerData.money - (options['reserve'] != null ? options['reserve'] : Number(ns.read("reserve.txt") || 0));
     const maxBudget = 0.99; // Note: To avoid rounding issues and micro-spend race-conditions, only allow budgeting up to 99% of money per tick
-    let budget = Math.min(maxBudget, (options['equipment-budget'] || defaultMaxSpendPerTickTransientEquipment)) * homeMoney;
-    let augBudget = Math.min(maxBudget, (options['augmentations-budget'] || defaultMaxSpendPerTickPermanentEquipment)) * homeMoney;
+    const explicitEquipmentBudget = options['equipment-budget'] != null;
+    const explicitAugmentationBudget = options['augmentations-budget'] != null;
+    let budget = Math.min(maxBudget, explicitEquipmentBudget ? options['equipment-budget'] : defaultMaxSpendPerTickTransientEquipment) * homeMoney;
+    let augBudget = Math.min(maxBudget, explicitAugmentationBudget ? options['augmentations-budget'] : defaultMaxSpendPerTickPermanentEquipment) * homeMoney;
     // Hack: Default aug budget is cut by 1/100 in a few situations (TODO: Add more, like when BitnodeMults are such that gang income is severely nerfed)
     if (!is4sBought)
         is4sBought = await getNsDataThroughFile(ns, `ns.stock.has4SDataTixApi()`);
     if (!is4sBought || resetInfo.currentNode === 8) {
-        budget /= 100;
-        augBudget /= 100;
+        if (explicitEquipmentBudget && explicitAugmentationBudget) {
+            // Explicit budgets are assumed to come from the caller's BN strategy. Keep the conservative fallback only for defaults.
+        } else if (explicitEquipmentBudget) {
+            augBudget /= 100;
+        } else if (explicitAugmentationBudget) {
+            budget /= 100;
+        } else {
+            budget /= 100;
+            augBudget /= 100;
+        }
     }
     // Find out what outstanding equipment can be bought within our budget
     for (const equip of equipments) {
@@ -512,7 +526,7 @@ async function waitForGameUpdate(ns, oldGangInfo) {
 async function enableOrDisableWarfare(ns, myGangInfo) {
     warfareFinished = Math.round(myGangInfo.territory * 2 ** 20) / 2 ** 20 /* Handle API imprecision */ >= 1;
     if (warfareFinished && !myGangInfo.territoryWarfareEngaged) return; // No need to engage once we hit 100%
-    const otherGangs = await getNsDataThroughFile(ns, 'ns.gang.getAllGangInformation()'); // Returns dict of { [gangName]: { "power": Number, "territory": Number } }
+    const otherGangs = await getOtherGangInformation(ns); // Returns dict of { [gangName]: { "power": Number, "territory": Number } }
     let lowestWinChance = 1, totalWinChance = 0, totalActiveGangs = 0;
     let lowestWinChanceGang = "";
     for (const otherGang in otherGangs) {
@@ -534,6 +548,8 @@ async function enableOrDisableWarfare(ns, myGangInfo) {
 }
 
 // Ram-dodging helper to get gang information for each item in a list
+const getOtherGangInformation = /**@returns{Promise<{[gangName: string]: {power: number, territory: number};}>}*/ async (ns) =>
+    await getNsDataThroughFile(ns, `Object.fromEntries(Object.entries(ns.gang.getAllGangInformation()).filter(([gangName]) => gangName !== ns.args[0]))`, null, [myGangFaction]);
 const getGangInfoDict = /**@returns{Promise<{[gangMember: string]: any;}>}*/async (ns, elements, gangFunction) => await getDict(ns, elements, `gang.${gangFunction}`, `/Temp/gang-${gangFunction}.txt`);
 const getDict = /**@returns{Promise<{[key: string]: any;}>}*/ async (ns, elements, nsFunction, fileName) => await getNsDataThroughFile(ns, `Object.fromEntries(ns.args.map(o => [o, ns.${nsFunction}(o)]))`, fileName, elements);
 

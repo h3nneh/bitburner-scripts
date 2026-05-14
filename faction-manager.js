@@ -1,6 +1,9 @@
+// Based on: https://github.com/66Ton99/bitburner-scripts/blob/main/faction-manager.js
+// Local change: removed crime_money from default desired stats
 import {
     log, getConfiguration, instanceCount, formatNumberShort, formatMoney,
-    getNsDataThroughFile, getActiveSourceFiles, tryGetBitNodeMultipliers, getStocksValue
+    getNsDataThroughFile, getActiveSourceFiles, tryGetBitNodeMultipliers, getStocksValue, getFilePath,
+    formatDuration, getErrorInfo
 } from './helpers.js'
 
 // PLAYER CONFIGURATION CONSTANTS
@@ -10,23 +13,26 @@ const easyAccessFactions = [
     "BitRunners", "CyberSec", "NiteSec", /* Hack Based */ "Netburners", /* Hacknet-based */ "Slum Snakes", "Tetrads", /* Early Crime */
 ];
 const default_priority_augs = ["The Red Pill", "The Blade's Simulacrum", "Neuroreceptor Management Implant"]; // By default, take these augs when they are accessible
-const default_desired_augs = ["CashRoot Starter Kit"] // By default, mark these augs as "desired" regardless of their stats
+const augCashRoot = "CashRoot Starter Kit";
+const default_desired_augs = [augCashRoot] // By default, mark these augs as "desired" regardless of their stats
 // If not in a gang, and we are nearing unlocking gangs (54K Karma) we will attempt to join any/all of these factions
 const potentialGangFactions = ["Slum Snakes", "Tetrads", "The Black Hand", "The Syndicate", "The Dark Army", "Speakers for the Dead"];
 const default_hidden_stats = ['bladeburner', 'hacknet']; // Hide from the summary table by default because they clearly all come from one faction.
 const output_file = "/Temp/affordable-augs.txt"; // Temp file produced for autopilot.js to relay information about current owned & affordable augs.
+const installStateFile = "/Temp/faction-manager-install-state.txt";
 const staneksGift = "Stanek's Gift - Genesis";
-const factionsWithoutDonation = ["Bladeburners", "Church of the Machine God", "Shadows of Anarchy"]; // Not allowed to donate to these factions for rep
-
+const shadowsOfAnarchy = "Shadows of Anarchy";
+const soaWksHarmonizer = "SoA - phyzical WKS harmonizer";
+const augTRP = "The Red Pill";
+const factionsWithoutDonation = ["Bladeburners", "Church of the Machine God", "Shadows of Anarchy"];
 // Factors used in calculations
 const nfCountMult = 1.14; // Factors that control how NeuroFlux prices scale
 let augCountMult = 1.9; // The multiplier for the cost increase of augmentations (changes based on SF11 level)
-let favorToDonate = 0; // Based on the current BitNode Multipliers, the favour required to donate to factions for reputation.
 // Various globals because this script does not do modularity well. Assigned values are all ignored, just used to get type hints
 let playerData = (/**@returns{Player}*/() => null)(), bitNode = 0, gangFaction = "";
 let numAugsAwaitingInstall = 0, nfLevelPurchased = 0, startingPlayerMoney = 0, stockValue = 0; // If the player holds stocks, their liquidation value will be determined
-let factionNames = [""], joinedFactions = [""], desiredAugs = [""], desiredStatsFilters = [""], purchaseFactionDonations = [];
-let ownedAugmentations = [""], simulatedOwnedAugmentations = [""], allAugStats = [""], priorityAugs = [""];
+let factionNames = [""], joinedFactions = [""], desiredAugs = [""], desiredStatsFilters = [""], purchaseFactionRepCosts = [];
+let ownedAugmentations = [""], installedAugmentations = [""], simulatedOwnedAugmentations = [""], allAugStats = [""], priorityAugs = [""];
 let effectiveSourceFiles = (/**@returns {{[bitNode: number]: number}}*/() => ({}))();
 let factionData = (/**@returns {{[factionName: string]: FactionData}}*/() => ({}))();
 let augmentationData = (/**@returns {{[augmentationName: string]: AugmentationData}}*/() => ({}))();
@@ -35,17 +41,69 @@ let bitNodeMults = (/**@returns{BitNodeMultipliers}*/() => undefined)();
 let printToTerminal, ignorePlayerData;
 let _ns; // Used to avoid passing ns to functions that don't need it except for some logs.
 
+function getReservedCash() {
+    return bitNode == 8 ? 0 : Number(_ns?.read("reserve.txt") || 0);
+}
+
+function getFavorToDonate() {
+    return Math.floor(150 * (bitNodeMults?.FavorToDonateToFaction ?? 1));
+}
+
+function canDonateToFaction(faction) {
+    return faction?.joined && faction.favor >= getFavorToDonate() &&
+        ![gangFaction, ...factionsWithoutDonation].includes(faction.name);
+}
+
+function getCostOfReputation(rep) {
+    return Math.ceil(1e6 * rep / playerData.mults.faction_rep / bitNodeMults.FactionWorkRepGain);
+}
+
+function getReqDonationForRep(repNeeded, factionOrFactionName) {
+    const faction = factionOrFactionName.name ? factionOrFactionName : factionData[factionOrFactionName];
+    return getCostOfReputation(Math.max(0, repNeeded - (faction?.reputation || 0)));
+}
+
+function shouldAllowDonationForAug(aug) {
+    return aug?.name == augTRP && !ownedAugmentations.includes(augTRP);
+}
+
+function getReqDonationForAug(aug, factionOrFactionName = null) {
+    if (!shouldAllowDonationForAug(aug)) return 0;
+    const faction = factionOrFactionName ? (factionOrFactionName.name ? factionOrFactionName : factionData[factionOrFactionName]) :
+        factionData[aug.getFromJoined()];
+    if (!canDonateToFaction(faction)) return 0;
+    return getReqDonationForRep(aug.reputation, faction);
+}
+
+function shouldOnlyBuyTrpInBn8() {
+    if (bitNode != 8 || ownedAugmentations.includes(augTRP)) return false;
+    return playerData.factions.includes("Daedalus") ||
+        (installedAugmentations.filter(aug => aug != strNF).length >= bitNodeMults.DaedalusAugsRequirement &&
+            playerData.skills.hacking >= (2500 * 0.9));
+}
+
+/** @param {NS} ns @param {{[bitNode: number]: number}} ownedSourceFiles */
+async function shouldDisableNeuroFluxForBn10Sleeves(ns, ownedSourceFiles) {
+    if (bitNode != 10) return false;
+    try {
+        const targetSleeveCount = Math.min(8, 6 + (ownedSourceFiles[10] || 0));
+        const numSleeves = await getNsDataThroughFile(ns, `ns.sleeve.getNumSleeves()`);
+        if (numSleeves < targetSleeveCount) return true;
+        const sleeveInfo = await getNsDataThroughFile(ns, `ns.args.map(i => ns.sleeve.getSleeve(i))`,
+            '/Temp/facman-sleeve-getSleeve-all.txt', [...Array(numSleeves).keys()]);
+        return sleeveInfo.some(sleeve => sleeve.memory < 100);
+    } catch {
+        return false;
+    }
+}
+
 let options = null; // A copy of the options used at construction time
 const argsSchema = [ // The set of all command line arguments
     ['all', false], // Display all factions (spoilers), not just accessible factions
-    ['a', false], // Flag-style alias for --all.
     ['hide-locked-factions', false], // Don't show factions that we don't currently have access to
     ['verbose', null], // Print the terminal as well as the script logs. If left null, this defaults to true in code now, but can be disabled with an explicit `--verbose false`
-    ['v', false], // (Kept for backwards compatilily) this was an alias flag for setting --verbose to true when it previously defaulted to false.
     ['ignore-player-data', false], // Display stats for all factions and augs, despite what we already have (kind of a "mock" mode)
-    ['i', false], // Flag alias for --ignore-player-data
-    // By default, we ignore "Shadows of Anarchy" because they are tied to infiltration (manual action) and their aug prices don't follow normal conventions
-    ['ignore-faction', ["Shadows of Anarchy"]], // Factions to omit from all data, stats, and calcs, (e.g.) if you do not want to purchase augs from them, or do not want to see them because they are impractical to join at this time
+    ['ignore-faction', []], // Factions to omit from all data, stats, and calcs, (e.g.) if you do not want to purchase augs from them, or do not want to see them because they are impractical to join at this time
     ['after-faction', []], // Pretend we were to buy all augs offered by these factions. Show us only what remains.
     ['force-join', null], // Always join these factions if we have an invite (useful to force join a gang faction)
     // Augmentation purchasing-related options. Controls what augmentations are included in cost calculations, and optionally purchased
@@ -54,8 +112,22 @@ const argsSchema = [ // The set of all command line arguments
     ['aug-desired', []], // These augs will be marked as "desired" whether or not they match desired-stats
     ['stat-desired', []], // Augs that give these will be starred (marked as desired and staged for purchase). If empty, defaults are picked based on your situation.
     ['neuroflux-disabled', false], // Set to true to skip including as many neuroflux upgrades as we can afford
-    ['disable-donations', false], // When displaying "obtainable" augs and prices, don't include augs that require a donation to meet their rep requirements
+    ['purchase-mode', null], // Centralized purchase profile: cashroot-only, no-neuroflux, any.
     ['purchase', false], // Set to true to pull the trigger on purchasing all desired augs in the order specified
+    ['manage-installs', false], // Centralized autopilot purchase/install policy owner.
+    ['install-at-aug-count', 6],
+    ['install-at-aug-plus-nf-count', 10],
+    ['install-for-augs', ["The Red Pill"]],
+    ['install-countdown', 5 * 60 * 1000],
+    ['reduced-aug-requirement-per-hour', 0.5],
+    ['wait-for-4s-threshold', 0.9],
+    ['disable-wait-for-4s', false],
+    ['money-focus-active', false],
+    ['bn10-sleeves-incomplete', false],
+    ['bn10-sleeve-reserve', 0],
+    ['reserving-money-for-daedalus', false],
+    ['player-in-gang', false],
+    ['on-reset-script', "autopilot.js"],
     ['ignore-stocks', false], // Set to true to ignore the liquidation value of stocks currently held when running
     ['ignore-stanek', false], // Set to true to ignore the fact that stanek is not yet taken before purchasing your first augs
     ['show-unavailable-aug-purchase-order', false], // Set to true to print the list of unavailable augmentations in optimal purchase order. (Note: Always displayed when no augs are available)
@@ -64,7 +136,6 @@ const argsSchema = [ // The set of all command line arguments
     ['sort', null], // What stat is the table of total faction stats sorted by. Defaults to your first --stat-desired
     ['hide-stat', []], // Stats to exclude from the final table (partial matching works)
     ['unique', false], // When displaying cumulative stats by faction, only include augs not given by a faction further up the list
-    ['u', false], // Flag alias for --unique
 ];
 
 // For convenience, these lists provide command-line <tab> auto-complete values
@@ -86,6 +157,8 @@ export function autocomplete(data, args) {
     const lastFlag = args.length > 1 ? args[args.length - 2] : null;
     if (lastFlag == "--sort" || lastFlag == "--stat-desired" || lastFlag == "--hide-stat")
         return statShortcuts.concat(stat_multis).concat(statPlayer.map(s => `${s}_level`));
+    if (lastFlag == "--purchase-mode")
+        return ["cashroot-only", "no-neuroflux", "any"];
     if (lastFlag == "--ignore-faction" || lastFlag == "--after-faction")
         return allFactions.map(f => f.replaceAll(" ", "_")).sort(); // Command line doesn't like spaces
     if (lastFlag == "--omit-aug" || lastFlag == "--aug-desired" || lastFlag == "--priority-aug")
@@ -93,22 +166,49 @@ export function autocomplete(data, args) {
     return [];
 }
 
-// Flags -a for all factions, -v to print to terminal
+function pushUnique(array, value) {
+    if (!array.includes(value)) array.push(value);
+}
+
+function applyPurchaseMode(ns, runOptions) {
+    const mode = runOptions['purchase-mode'];
+    if (!mode) return true;
+    if (mode == "cashroot-only") {
+        pushUnique(runOptions['priority-aug'], augCashRoot);
+        pushUnique(runOptions['aug-desired'], augCashRoot);
+        runOptions['neuroflux-disabled'] = true;
+        return true;
+    }
+    if (mode == "no-neuroflux") {
+        runOptions['neuroflux-disabled'] = true;
+        return true;
+    }
+    if (mode == "any") {
+        pushUnique(runOptions['stat-desired'], "*");
+        return true;
+    }
+    log(ns, `ERROR: Unknown --purchase-mode "${mode}". Valid values: cashroot-only, no-neuroflux, any.`, true, 'error');
+    return false;
+}
+
+// Use --all to include all factions and --verbose false to suppress terminal output.
 /** @param {NS} ns **/
 export async function main(ns) {
+    ns.disableLog('disableLog');
     const runOptions = getConfiguration(ns, argsSchema);
     if (!runOptions || await instanceCount(ns) > 1) return; // Prevent multiple instances of this script from being started, even with different args.
+    if (!applyPurchaseMode(ns, runOptions)) return;
     options = runOptions; // We don't set the global "options" until we're sure this is the only running instance
     _ns = ns;
 
     // Ensure all globals are reset before we proceed with the script, in case we've done things out of order
-    augCountMult = favorToDonate = playerData = gangFaction = nfLevelPurchased = startingPlayerMoney = stockValue = null;
-    factionNames = [], joinedFactions = [], desiredAugs = [], desiredStatsFilters = [], purchaseFactionDonations = [];
-    ownedAugmentations = [], simulatedOwnedAugmentations = [], effectiveSourceFiles = {}, allAugStats = [], priorityAugs = [], purchaseableAugs = [];
+    augCountMult = playerData = gangFaction = nfLevelPurchased = startingPlayerMoney = stockValue = null;
+    factionNames = [], joinedFactions = [], desiredAugs = [], desiredStatsFilters = [], purchaseFactionRepCosts = [];
+    ownedAugmentations = [], installedAugmentations = [], simulatedOwnedAugmentations = [], effectiveSourceFiles = {}, allAugStats = [], priorityAugs = [], purchaseableAugs = [];
     factionData = {}, augmentationData = {}, bitNodeMults = {};
 
-    printToTerminal = (options.v || options.verbose === true || options.verbose === null) && !options['join-only'];
-    ignorePlayerData = options.i || options['ignore-player-data'];
+    printToTerminal = (options.verbose === true || options.verbose === null) && !options['join-only'];
+    ignorePlayerData = options['ignore-player-data'];
     const afterFactions = options['after-faction'].map(f => f.replaceAll("_", " "));
     const omitAugs = options['omit-aug'].map(f => f.replaceAll("_", " "));
     // Set up augs which should take priority (in our purchase budget) over all others
@@ -121,14 +221,14 @@ export async function main(ns) {
 
     // Determine which source files are active, which, for one, lets us determine how the cost of augmentations will scale
     playerData = await getPlayerInfo(ns);
-    let resetInfo = (/**@returns{ResetInfo}*/() => null)(); // Hack to get type hints despite use of ram-dodging
+    let resetInfo = (/**@returns{ResetInfo}*/() => null)(); // Hack to get type hints.
     resetInfo = await getNsDataThroughFile(ns, `ns.getResetInfo()`);
     bitNode = resetInfo.currentNode;
     const ownedSourceFiles = await getActiveSourceFiles(ns, false);
     effectiveSourceFiles = await getActiveSourceFiles(ns, true);
     const sf4Level = bitNode == 4 ? 3 : ownedSourceFiles[4] || 0; // If in BN4, singularity costs are as though you had SF4.3
-    if (sf4Level == 0)
-        return log(ns, `ERROR: This script requires SF4 (singularity) functions to work.`, true, 'error');
+    if (!(bitNode == 4 || 4 in ownedSourceFiles))
+        return log(ns, `ERROR: This script requires Singularity functions to work.`, true, 'error');
     else if (sf4Level < 3)
         log(ns, `WARNING: This script makes heavy use of singularity functions, which are quite expensive before you have SF4.3. ` +
             `Unless you have a lot of free RAM for temporary scripts, you may get runtime errors.`);
@@ -140,17 +240,25 @@ export async function main(ns) {
     // Collect information about the player
     const gangInfo = await getGangInfo(ns);
     gangFaction = gangInfo ? gangInfo.faction : null;
-    favorToDonate = await getNsDataThroughFile(ns, 'ns.getFavorToDonate()');
     startingPlayerMoney = playerData.money;
     stockValue = options['ignore-stocks'] ? 0 : await getStocksValue(ns);
     joinedFactions = ignorePlayerData ? [] : playerData.factions;
     log(ns, 'In factions: ' + joinedFactions);
     // Get owned augmentations (whether they've been installed or not). Ignore strNF because you can always buy more.
     ownedAugmentations = await getNsDataThroughFile(ns, 'ns.singularity.getOwnedAugmentations(true)', '/Temp/player-augs-purchased.txt');
-    const installedAugmentations = (/**@returns {string[]}*/() => null)() ??
-        await getNsDataThroughFile(ns, 'ns.singularity.getOwnedAugmentations()', '/Temp/player-augs-installed.txt');
+    installedAugmentations = await getNsDataThroughFile(ns, 'ns.singularity.getOwnedAugmentations()', '/Temp/player-augs-installed.txt');
     numAugsAwaitingInstall = ownedAugmentations.length - installedAugmentations.length;
-    if (options['neuroflux-disabled']) omitAugs.push(strNF);
+    if (bitNode == 8) {
+        options['neuroflux-disabled'] = true;
+        if (!omitAugs.includes(strNF)) omitAugs.push(strNF);
+        log(ns, `INFO: Disabling ${strNF} purchases in BN8.`, printToTerminal);
+    } else if (options['neuroflux-disabled']) {
+        if (!omitAugs.includes(strNF)) omitAugs.push(strNF);
+    } else if (await shouldDisableNeuroFluxForBn10Sleeves(ns, ownedSourceFiles)) {
+        options['neuroflux-disabled'] = true;
+        if (!omitAugs.includes(strNF)) omitAugs.push(strNF);
+        log(ns, `INFO: Disabling ${strNF} purchases because BN10 Covenant sleeves/memory are not complete yet.`, printToTerminal);
+    }
     simulatedOwnedAugmentations = ignorePlayerData ? [] : ownedAugmentations.filter(a => a != strNF);
     // Clear "priority" / "desired" lists of any augs we already own
     priorityAugs = priorityAugs.filter(name => !simulatedOwnedAugmentations.includes(name));
@@ -159,11 +267,15 @@ export async function main(ns) {
     desiredStatsFilters = options['stat-desired'];
     if ((desiredStatsFilters?.length ?? 0) == 0) { // If the user does has not specified stats or augmentations to prioritize, use sane defaults
         // There are some situations where we will accept any augmentation whatsoever...
-        const willTakeAnyAug = (ownedAugmentations.length > 40) || // Once we have more than N augs, switch to buying up anything and everything
+        const cashRootOwned = ownedAugmentations.includes(augCashRoot);
+        const cashRootOnlyMode = options['purchase-mode'] == "cashroot-only";
+        const forceOnlyCashRoot = cashRootOnlyMode || (!cashRootOwned && options['aug-desired'].length == 0);
+        const willTakeAnyAug = !forceOnlyCashRoot && cashRootOwned && ((ownedAugmentations.length > 40) || // Once we have more than N augs, switch to buying up anything and everything
             (bitNode == 6 || bitNode == 7 || playerData.factions.includes("Bladeburners")) || // If doing bladeburners, combat augs matter too, so just get everything
-            ((Date.now() - resetInfo.lastAugReset) < 20 * 60 * 1000); // If we've been in the bitnode for less than 20 minutes, autopilot is configured to "quick-install", any aug is worthwhile in this time window 
-        desiredStatsFilters = willTakeAnyAug ? ['*'] : // Take any aug if one of the above criteria is met
-            bitNode == 8 ? ['hacking_level', 'hacking_exp'] : // In BN8, we only want to install if we will be boosting our hack level (to unlock Daedalus). We don't need rep as much, since it can be purchased immediately.
+            ((Date.now() - resetInfo.lastAugReset) < 20 * 60 * 1000)); // If we've been in the bitnode for less than 20 minutes, autopilot is configured to "quick-install", any aug is worthwhile in this time window after CashRoot
+        desiredStatsFilters = forceOnlyCashRoot ? [] :
+            willTakeAnyAug ? ['*'] : // Take any aug if one of the above criteria is met
+            bitNode == 8 ? ['hacking_level', 'hacking_speed', 'hacking_grow', 'hacking_chance'] : // In BN8, money comes from stocks, so favor stats that improve stock manipulation throughput and target access.
                 ['hacking', 'faction_rep', 'company_rep', 'charisma', 'hacknet']; // Otherwise get hacking + rep boosting, etc. for unlocking augs more quickly
     }
     log(ns, 'Desired stats filter: ' + JSON.stringify(desiredStatsFilters));
@@ -179,15 +291,16 @@ export async function main(ns) {
         log(ns, 'INFO: Skipping joining available factions due to the --ignore-player-data flag set.');
     else {
         log(ns, 'Joining available factions...');
-        let forceJoinFactions = options['force-join'] || [];
+        let forceJoinFactions = options['force-join'] ? [...options['force-join']] : [];
         // If the user didn't set the 'force-join' option, there are some defaults we should apply
-        if (!forceJoinFactions) {
+        if (options['force-join'] == null) {
+            forceJoinFactions.push("Shadows of Anarchy");
             // If we're in BN 10, we can purchase special Sleeve-related things from the Covenant, so we should always join it
             if (bitNode == 10)
                 forceJoinFactions.push("The Covenant");
             // If gangs are an available feature, we should by default want to join any available gang factions
             if (!gangFaction && 2 in ownedSourceFiles && ns.heart.break() <= -53000) {
-                forceJoinFactions.push(potentialGangFactions); // Try to join all gang factions as we near unlocking gangs, regardless of their augmentations
+                forceJoinFactions.push(...potentialGangFactions); // Try to join all gang factions as we near unlocking gangs, regardless of their augmentations
                 log(ns, `INFO: Will join any gang faction because Karma is at ${formatNumberShort(ns.heart.break())}`, printToTerminal, printToTerminal ? 'info' : undefined);
             }
         }
@@ -200,7 +313,7 @@ export async function main(ns) {
     let hideSummaryStats = options['hide-stat'];
     if (hideSummaryStats.length == 0) hideSummaryStats = default_hidden_stats;
     const sort = unshorten(options.sort || desiredStatsFilters[0]);
-    displayFactionSummary(ns, sort, options.u || options.unique, afterFactions, hideSummaryStats);
+    displayFactionSummary(ns, sort, options.unique, afterFactions, hideSummaryStats);
 
     // Determine the current bitnode multipliers
     bitNodeMults = await tryGetBitNodeMultipliers(ns);
@@ -213,39 +326,360 @@ export async function main(ns) {
             `prevent you from doing so for the rest of this BN. (Run with '--ignore-stanek' to bypass this warning.)`, true);
     else if (options.purchase && purchaseableAugs) {
         await purchaseDesiredAugs(ns);
-        ns.write(output_file, "", "w"); // Clear the file so it isn't misinterpreted on next reset.
-    } else if (!ignorePlayerData) { // Don't do this next part if we were "mocking" the player for this run
-        // Write a file that summarizes what augs we could afford if we could ascend right now. (used by autopilot.js)
-        const augsAwaitingInstall = ownedAugmentations.slice(installedAugmentations.length); // Assumes augs are returned in purchased order
-        // Infer the number of nf we have installed based on the current nf purchase level, minus the pending nf installs
-        const nfInstalled = nfLevelPurchased - augsAwaitingInstall.filter(a => a == strNF).length;
-        ns.write(output_file, JSON.stringify({
-            // Augs we already have installed
-            installed_augs: installedAugmentations, // Names of augs we've installed (Note: NeuroFlux will only appears once)
-            installed_count: installedAugmentations.length, // Number of augs we've installed (Note: multiple NeuroFlux levels only counts as one)
-            installed_count_nf: nfInstalled, // Count of NeuroFlux levels we have installed
-            installed_count_ex_nf: installedAugmentations.filter(a => a != strNF).length, // Count of non-NeuroFlux augs installed
-            // Augs we have purchased, but perhaps not installed
-            purchased_augs: ownedAugmentations, // Names of augs we've purchased (which may include duplicates of NeuroFlux)
-            purchased_count: ownedAugmentations.length, // Total number of augs we've purchased (some of which may not be installed)
-            purchased_count_nf: nfLevelPurchased, // Count of NeuroFlux levels we have purchased (some of which may not be installed)
-            purchased_count_ex_nf: ownedAugmentations.filter(a => a != strNF).length, // Count augmentations we have purchased (some of which may not be installed)
-            // Augs awaiting installation (to be explicit about what's installed vs purchased)
-            awaiting_install_augs: augsAwaitingInstall, // Names of augmentations purchased but not yet installed
-            awaiting_install_count: numAugsAwaitingInstall, // Number of augmentations awaiting installation
-            awaiting_install_count_nf: augsAwaitingInstall.filter(a => a == strNF).length, // Count of NeuroFlux levels awaiting installation
-            awaiting_install_count_ex_nf: augsAwaitingInstall.filter(a => a != strNF).length, // Count of non-NeuroFlux awaiting installation
-            // Augs we want to purchase
-            affordable_augs: purchaseableAugs.map(a => a.name), // List of aug names we can currently afford to buy
-            affordable_count: purchaseableAugs.length, // Count of augmentations we can currently install
-            affordable_count_nf: purchaseableAugs.filter(a => a.name == strNF).length, // Count of NeuroFlux levels we can currently afford to buy
-            affordable_count_ex_nf: purchaseableAugs.filter(a => a.name != strNF).length, // Count of unique augs we can currently afford to buy, ignoring NeuroFlux
-            total_rep_cost: Object.values(purchaseFactionDonations).reduce((t, r) => t + r, 0), // Total money needed to buy the reputation needed for all affordable augs
-            total_aug_cost: getTotalCost(purchaseableAugs), // Total money needed to buy all affordable augs (excludes the rep cost above)
-            // Unpurchased augs
-            unpurchased_count: Object.values(augmentationData).filter(a => !a.owned).length, // Number of augs are we have not yet purchased (note: depending on config, may not include all augs in the game)
-        }, undefined, 2), "w");
+        // Refresh owned/pending state after purchases so the output file reflects the actual post-purchase situation.
+        ownedAugmentations = await getNsDataThroughFile(ns, 'ns.singularity.getOwnedAugmentations(true)', '/Temp/player-augs-purchased.txt');
+        numAugsAwaitingInstall = ownedAugmentations.length - installedAugmentations.length;
+        purchaseableAugs = [];
+        purchaseFactionRepCosts = [];
     }
+    let installStatus = null;
+    if (options['manage-installs'] && !ignorePlayerData)
+        installStatus = await manageAutomatedAugmentations(ns, resetInfo, ownedSourceFiles, sf11Level);
+    if (!ignorePlayerData) { // Don't do this next part if we were "mocking" the player for this run
+        // Write a file that summarizes what augs we could afford if we could ascend right now. (used by autopilot.js)
+        const output = buildAugmentationStatus();
+        if (installStatus) output.install_status = installStatus;
+        ns.write(output_file, JSON.stringify(output, undefined, 2), "w");
+    }
+}
+
+function buildAugmentationStatus() {
+    const augsAwaitingInstall = ownedAugmentations.slice(installedAugmentations.length); // Assumes augs are returned in purchased order
+    const nfInstalled = nfLevelPurchased - augsAwaitingInstall.filter(a => a == strNF).length;
+    return {
+        installed_augs: installedAugmentations,
+        installed_count: installedAugmentations.length,
+        installed_count_nf: nfInstalled,
+        installed_count_ex_nf: installedAugmentations.filter(a => a != strNF).length,
+        purchased_augs: ownedAugmentations,
+        purchased_count: ownedAugmentations.length,
+        purchased_count_nf: nfLevelPurchased,
+        purchased_count_ex_nf: ownedAugmentations.filter(a => a != strNF).length,
+        awaiting_install_augs: augsAwaitingInstall,
+        awaiting_install_count: numAugsAwaitingInstall,
+        awaiting_install_count_nf: augsAwaitingInstall.filter(a => a == strNF).length,
+        awaiting_install_count_ex_nf: augsAwaitingInstall.filter(a => a != strNF).length,
+        affordable_augs: purchaseableAugs.map(a => a.name),
+        affordable_count: purchaseableAugs.length,
+        affordable_count_nf: purchaseableAugs.filter(a => a.name == strNF).length,
+        affordable_count_ex_nf: purchaseableAugs.filter(a => a.name != strNF).length,
+        total_rep_cost: Object.values(purchaseFactionRepCosts).reduce((t, r) => t + r, 0),
+        total_aug_cost: getTotalCost(purchaseableAugs),
+        unpurchased_count: Object.values(augmentationData).filter(a => !a.owned).length,
+    };
+}
+
+function readInstallState(ns, resetInfo) {
+    let state = {};
+    try { state = JSON.parse(ns.read(installStateFile) || "{}"); }
+    catch { state = {}; }
+    if (state.lastAugReset != resetInfo.lastAugReset)
+        state = {};
+    return {
+        lastAugReset: resetInfo.lastAugReset,
+        installCountdown: Number(state.installCountdown) || 0,
+        installCountdownResets: Number(state.installCountdownResets) || 0,
+        reservedPurchase: Number(state.reservedPurchase) || 0,
+        lastBn8TrpPurchaseAttempt: Number(state.lastBn8TrpPurchaseAttempt) || 0,
+    };
+}
+
+function writeInstallState(ns, state) {
+    ns.write(installStateFile, JSON.stringify(state), "w");
+}
+
+function getPendingAugmentationSummary(status) {
+    const awaitingInstallNonNfCount = Math.max(status.awaiting_install_count_ex_nf || 0,
+        (status.purchased_count_ex_nf || 0) - (status.installed_count_ex_nf || 0));
+    const pendingAugCount = status.affordable_count_ex_nf + awaitingInstallNonNfCount;
+    const pendingNfCount = status.affordable_count_nf + status.awaiting_install_count_nf;
+    const pendingAugInclNfCount = pendingAugCount + pendingNfCount;
+    let awaitingAugs = status.awaiting_install_augs.filter(aug => aug != strNF);
+    if (awaitingAugs.length == 0 && awaitingInstallNonNfCount > 0)
+        awaitingAugs.push(`${awaitingInstallNonNfCount} non-NeuroFlux augmentations`);
+    let affordableAugs = status.affordable_augs.filter(aug => aug != strNF);
+    if (status.awaiting_install_count_nf > 0)
+        awaitingAugs.push(`${strNF} (x${status.awaiting_install_count_nf})`);
+    if (status.affordable_count_nf > 0)
+        affordableAugs.push(`${strNF} (x${status.affordable_count_nf})`);
+    const augSummary = `${pendingAugCount} of ${status.unpurchased_count - 1} remaining augmentations` +
+        (pendingNfCount > 0 ? ` + ${pendingNfCount} levels of NeuroFlux.` : '.');
+    const detailLines = [];
+    if (awaitingAugs.length > 0)
+        detailLines.push(`\n  Awaiting install: [\"${awaitingAugs.join("\", \"")}\"]`);
+    if (affordableAugs.length > 0)
+        detailLines.push(`\n  Affordable now: [\"${affordableAugs.join("\", \"")}\"]`);
+    return { awaitingInstallNonNfCount, pendingAugCount, pendingNfCount, pendingAugInclNfCount, augSummary, detailLines };
+}
+
+async function checkIfGrafting(ns) {
+    const currentWork = await getNsDataThroughFile(ns, 'ns.singularity.getCurrentWork()', '/Temp/facman-current-work.txt');
+    if (currentWork?.type != "GRAFTING") return false;
+    log(ns, "Grafting in progress. faction-manager.js will not install augmentations or otherwise interrupt it.", printToTerminal);
+    return true;
+}
+
+async function shouldDelayAutomatedInstall(ns, resetInfo, status, augsNeeded, augsNeededInclNf) {
+    if (await checkIfGrafting(ns))
+        return `Grafting in progress. Not installing augmentations.`;
+    const remainingNonNfAugs = Math.max(0, (status.unpurchased_count || 0) - 1);
+    const affordableNowCount = (status.affordable_count_ex_nf || 0) + (status.affordable_count_nf || 0);
+    const awaitingNonNfCount = Math.max(status.awaiting_install_count_ex_nf || 0,
+        (status.purchased_count_ex_nf || 0) - (status.installed_count_ex_nf || 0));
+    const awaitingInclNfCount = status.awaiting_install_count || 0;
+    const alreadyMeetsInstallThreshold = awaitingNonNfCount >= augsNeeded || awaitingInclNfCount >= augsNeededInclNf;
+    const bn8DelayForRedPill = playerData.factions.includes("Daedalus") ||
+        (status.installed_count >= bitNodeMults.DaedalusAugsRequirement && playerData.skills.hacking >= (2500 * 0.9));
+    if (bitNode == 8 && !installedAugmentations.includes(augTRP) && bn8DelayForRedPill &&
+        !status.affordable_augs.includes(augTRP) && !status.awaiting_install_augs.includes(augTRP))
+        return `BN8 Red Pill mode: not installing until "${augTRP}" is affordable or awaiting install.`;
+    if (bitNode == 8 && awaitingInclNfCount > 0)
+        return null;
+    if (bitNode != 8 && !alreadyMeetsInstallThreshold && awaitingInclNfCount > 0 && affordableNowCount == 0 && remainingNonNfAugs > 0)
+        return `Not installing yet because only ${awaitingInclNfCount} augmentations are waiting to install, ` +
+            `that is still below the current install threshold (${augsNeeded} excluding NeuroFlux / ${augsNeededInclNf} including NeuroFlux), ` +
+            `and we cannot afford any additional purchases right now while ${remainingNonNfAugs} non-NeuroFlux augmentations remain.`;
+    if (bitNode != 8 && !options['disable-wait-for-4s']) {
+        const have4STixApi = await getNsDataThroughFile(ns, `ns.stock.has4SDataTixApi()`, '/Temp/facman-has-4s-tix.txt');
+        if (!have4STixApi) {
+            const have4SData = await getNsDataThroughFile(ns, `ns.stock.has4SData()`, '/Temp/facman-has-4s-data.txt');
+            const totalWorth = playerData.money + stockValue;
+            const totalCost = 25E9 * bitNodeMults.FourSigmaMarketDataApiCost +
+                (have4SData ? 0 : 1E9 * bitNodeMults.FourSigmaMarketDataCost);
+            const ratio = totalWorth / totalCost;
+            if (ratio >= options['wait-for-4s-threshold'])
+                return `Not installing until scripts purchase the 4SDataTixApi because we have ` +
+                    `${(100 * totalWorth / totalCost).toFixed(0)}% of the cost (controlled by --wait-for-4s-threshold)`;
+        }
+    }
+    if (bitNode == 8) {
+        if (playerData.factions.includes("Daedalus")) {
+            if (!installedAugmentations.includes(augTRP) && !status.affordable_augs.includes(augTRP) && !status.awaiting_install_augs.includes(augTRP))
+                return `We're in Daedalus, so we won't install until we can afford to purchase "${augTRP}".`;
+        } else if (status.installed_count >= bitNodeMults.DaedalusAugsRequirement && playerData.skills.hacking >= (2500 * 0.9)) {
+            return `Not installing because we're in BN8 and we have enough augs and ` +
+                (playerData.skills.hacking < 2500 ? 'nearly ' : '') +
+                `enough hack level to get invited to Daedalus once we hit $100b.`;
+        }
+    }
+    if (options['reserving-money-for-daedalus'])
+        return `Not installing since we are close to earning an invite from Daedalus.`;
+    if (bitNode == 10 && playerData.money >= 10e15)
+        return `Not installing anymore since we are nearing the 100q needed to purchase the 6th sleeve from the Covenant.`;
+    return null;
+}
+
+async function refreshOwnedAfterAutomatedPurchase(ns) {
+    ownedAugmentations = await getNsDataThroughFile(ns, 'ns.singularity.getOwnedAugmentations(true)', '/Temp/player-augs-purchased.txt');
+    installedAugmentations = await getNsDataThroughFile(ns, 'ns.singularity.getOwnedAugmentations()', '/Temp/player-augs-installed.txt');
+    numAugsAwaitingInstall = ownedAugmentations.length - installedAugmentations.length;
+    purchaseableAugs = [];
+    purchaseFactionRepCosts = [];
+}
+
+async function purchaseManagedAugs(ns, state, purchaseMode = null) {
+    if (purchaseMode && purchaseMode != options['purchase-mode']) {
+        options['purchase-mode'] = purchaseMode;
+        if (purchaseMode == "no-neuroflux") options['neuroflux-disabled'] = true;
+        if (purchaseMode == "cashroot-only") {
+            options['neuroflux-disabled'] = true;
+            priorityAugs = [augCashRoot];
+            desiredAugs = [augCashRoot];
+            purchaseableAugs = purchaseableAugs.filter(aug => aug.name == augCashRoot);
+        }
+    }
+    await ns.write("reserve.txt", 0, "w");
+    await purchaseDesiredAugs(ns);
+    await refreshOwnedAfterAutomatedPurchase(ns);
+    state.reservedPurchase = 0;
+    state.installCountdown = 0;
+    state.installCountdownResets = 0;
+    writeInstallState(ns, state);
+}
+
+function launchAscendForManagedInstall(ns, status, summary, cashRootReady) {
+    const ascendArgs = ['--install-augmentations', true, '--skip-faction-manager-purchase', '--on-reset-script', options['on-reset-script']];
+    if (cashRootReady)
+        ascendArgs.push('--spend-all-before-install', '--cashroot-only');
+    if (summary.pendingAugInclNfCount == 0)
+        ascendArgs.push("--allow-soft-reset");
+    log(ns, `INFO: faction-manager.js invoking ascend.js to install: ${summary.augSummary}`, true, 'info');
+    try {
+        ns.spawn(getFilePath('ascend.js'), { threads: 1, spawnDelay: 1000 }, ...ascendArgs);
+        return `Invoking ascend.js to install: ${summary.augSummary}`;
+    } catch (error) {
+        const message = `ERROR: Failed to launch ascend.js. Will try again later. Caught: ${getErrorInfo(error)}`;
+        log(ns, message, true, 'error');
+        return message;
+    }
+}
+
+async function manageAutomatedAugmentations(ns, resetInfo, ownedSourceFiles, sf11Level) {
+    const state = readInstallState(ns, resetInfo);
+    if (options['money-focus-active']) {
+        state.reservedPurchase = 0;
+        state.installCountdown = 0;
+        writeInstallState(ns, state);
+        return { status: `BN3 --money-focus is active. Not buying or installing augmentations while money-focus is enabled.` };
+    }
+    if (options['bn10-sleeves-incomplete']) {
+        state.reservedPurchase = 0;
+        state.installCountdown = 0;
+        writeInstallState(ns, state);
+        return {
+            status: `Not buying or installing augmentations because BN10 is complete and Covenant sleeves/memory are still missing. ` +
+                `Reserving ${formatMoney(options['bn10-sleeve-reserve'])} for the next sleeve purchase.`
+        };
+    }
+
+    const status = buildAugmentationStatus();
+    const summary = getPendingAugmentationSummary(status);
+    const totalCost = status.total_rep_cost + status.total_aug_cost;
+    const inFirstBn9Aug = bitNode == 9 && Math.abs(resetInfo.lastNodeReset - resetInfo.lastAugReset) < 1000;
+    let reducedAugReq = Math.floor(options['reduced-aug-requirement-per-hour'] * (Date.now() - resetInfo.lastAugReset) / 3.6E6);
+    if (inFirstBn9Aug)
+        reducedAugReq = -2;
+    const augsNeeded = Math.max(1, options['install-at-aug-count'] + sf11Level - reducedAugReq);
+    const augsNeededInclNf = Math.max(1, options['install-at-aug-plus-nf-count'] + sf11Level - reducedAugReq);
+    const bn8FrequentInstall = bitNode == 8;
+    const bn8TrpReady = status.affordable_augs.includes(augTRP) || status.awaiting_install_augs.includes(augTRP);
+    const bn8DaedalusReady = playerData.factions.includes("Daedalus") ||
+        (status.installed_count >= bitNodeMults.DaedalusAugsRequirement && playerData.skills.hacking >= (2500 * 0.9));
+    const bn8RedPillMode = bn8FrequentInstall && !installedAugmentations.includes(augTRP) && (bn8DaedalusReady || bn8TrpReady);
+    const cashRootReady = !installedAugmentations.includes(augCashRoot) &&
+        (status.affordable_augs.includes(augCashRoot) || status.awaiting_install_augs.includes(augCashRoot));
+    const cashRootGateActive = !installedAugmentations.includes(augCashRoot) && !cashRootReady;
+
+    if (bn8RedPillMode && playerData.factions.includes("Daedalus") && !bn8TrpReady) {
+        const interval = 60 * 1000;
+        if (Date.now() - state.lastBn8TrpPurchaseAttempt < interval) {
+            writeInstallState(ns, state);
+            return { status: `BN8 Red Pill mode: joined Daedalus but "${augTRP}" is not purchased. Waiting before retrying faction-manager purchase.` };
+        }
+        state.lastBn8TrpPurchaseAttempt = Date.now();
+        writeInstallState(ns, state);
+        log(ns, `INFO: BN8 Red Pill mode: forcing a faction-manager purchase attempt for "${augTRP}".`, true, 'info');
+        await purchaseManagedAugs(ns, state, "no-neuroflux");
+        return { status: `BN8 Red Pill mode: forced a purchase attempt for "${augTRP}".` };
+    }
+    if (cashRootGateActive) {
+        state.reservedPurchase = 0;
+        state.installCountdown = 0;
+        writeInstallState(ns, state);
+        return {
+            status: `CashRoot priority mode: not buying or installing non-CashRoot augmentation(s). ` +
+                `Working toward "${augCashRoot}" from Sector-12 first.` + summary.detailLines.join("")
+        };
+    }
+    if (bn8RedPillMode && status.affordable_count_ex_nf > 0 && !status.affordable_augs.includes(augTRP)) {
+        state.reservedPurchase = 0;
+        state.installCountdown = 0;
+        writeInstallState(ns, state);
+        return {
+            status: `BN8 Red Pill mode: not buying ${status.affordable_count_ex_nf} non-TRP augmentation(s). ` +
+                `Preserving this reset and cash for Daedalus and "${augTRP}". Ready now: ${summary.augSummary}` + summary.detailLines.join("")
+        };
+    }
+
+    let resetStatus = `Reserving ${formatMoney(totalCost)} to install ${summary.augSummary}`;
+    let shouldReset = cashRootReady ||
+        options['install-for-augs'].some(a => status.affordable_augs.includes(a)) ||
+        summary.pendingAugCount >= augsNeeded || summary.pendingAugInclNfCount >= augsNeededInclNf;
+    let installCountdown = Number(options['install-countdown']) || 0;
+    if (cashRootReady) {
+        resetStatus = `"${augCashRoot}" is ready. Installing early only after ascend.js spends practical available cash on current purchases/upgrades.\n${resetStatus}`;
+        installCountdown = 0;
+    }
+    if (bn8FrequentInstall && status.affordable_count_ex_nf > 0 && (!bn8RedPillMode || status.affordable_augs.includes(augTRP))) {
+        shouldReset = true;
+        resetStatus = `BN8 frequent-install mode: buying the current non-NeuroFlux batch immediately before installing.\n${resetStatus}`;
+        installCountdown = 0;
+    }
+    if (bn8FrequentInstall && status.awaiting_install_count > 0 && status.affordable_count_ex_nf == 0 && (!bn8RedPillMode || bn8TrpReady)) {
+        shouldReset = true;
+        resetStatus = `BN8 frequent-install mode: installing already-purchased augmentations immediately after buying the current non-NeuroFlux batch.\n${resetStatus}`;
+        installCountdown = 0;
+    } else if (bn8RedPillMode && status.awaiting_install_count > 0 && !bn8TrpReady) {
+        state.reservedPurchase = 0;
+        state.installCountdown = 0;
+        writeInstallState(ns, state);
+        return {
+            status: `BN8 Red Pill mode: not installing already-purchased non-TRP augmentation(s). ` +
+                `Preserving this reset for Daedalus and "${augTRP}". Ready now: ${summary.augSummary}` + summary.detailLines.join("")
+        };
+    }
+
+    const quickInstallThreshold = options['player-in-gang'] ? 6 : 4;
+    if (!cashRootGateActive && !inFirstBn9Aug && !bn8FrequentInstall &&
+        (Date.now() - resetInfo.lastAugReset) < 20 * 60 * 1000 && summary.pendingAugInclNfCount >= quickInstallThreshold) {
+        shouldReset = true;
+        resetStatus = `We haven't been in this reset for long. We can do a quick reset immediately for a quick stat boost.\n${resetStatus}`;
+        if (installCountdown > 30 * 1000 && !options['player-in-gang'])
+            installCountdown = 30 * 1000;
+    }
+
+    if (!shouldReset && bn8RedPillMode && !status.affordable_augs.includes(augTRP)) {
+        state.reservedPurchase = 0;
+        state.installCountdown = 0;
+        writeInstallState(ns, state);
+        return {
+            status: `BN8 Red Pill mode is preserving this reset and cash until "${augTRP}" is affordable or awaiting install. ` +
+                `Ready now: ${summary.augSummary}` + summary.detailLines.join("") +
+                ` (\`run faction-manager.js --purchase-mode no-neuroflux\` for details)`
+        };
+    }
+    if (!shouldReset) {
+        state.reservedPurchase = 0;
+        state.installCountdown = 0;
+        writeInstallState(ns, state);
+        if (bn8FrequentInstall)
+            return {
+                status: `BN8 frequent-install mode is waiting for an affordable or purchased non-NeuroFlux augmentation. ` +
+                    `Ready now: ${summary.augSummary}` + summary.detailLines.join("") +
+                    ` (\`run faction-manager.js --purchase-mode no-neuroflux\` for details)`
+            };
+        return {
+            status: `Currently at ${formatDuration(Date.now() - resetInfo.lastAugReset)} since last aug. ` +
+                `Waiting for ${augsNeeded} new augs (or ${augsNeededInclNf} including NeuroFlux levels) before installing.` +
+                `\nReady now: ${summary.augSummary}` + summary.detailLines.join("") +
+                ((status.affordable_count_ex_nf + status.affordable_count_nf) == 0 ? '' : `\n  Total Cost to buy remaining affordable augs: ${formatMoney(totalCost)}`) +
+                ` (\`run faction-manager.js\` for details)`
+        };
+    }
+
+    const delayReason = await shouldDelayAutomatedInstall(ns, resetInfo, status, augsNeeded, augsNeededInclNf);
+    if (delayReason) {
+        state.reservedPurchase = 0;
+        writeInstallState(ns, state);
+        return { status: delayReason };
+    }
+
+    if (state.reservedPurchase < totalCost) {
+        if (state.reservedPurchase == 0)
+            state.installCountdown = Date.now() + (bn8FrequentInstall ? 0 : installCountdown);
+        else if (!status.affordable_augs.includes(augTRP) && !status.awaiting_install_augs.includes(augTRP)) {
+            state.installCountdownResets++;
+            const newCountdown = Date.now() + Math.max(10 * 1000,
+                installCountdown * (1 - (state.installCountdownResets / augsNeededInclNf)));
+            if (newCountdown > state.installCountdown)
+                state.installCountdown = newCountdown;
+        }
+        state.reservedPurchase = totalCost;
+        writeInstallState(ns, state);
+    }
+    if (state.installCountdown > Date.now()) {
+        resetStatus += `\n  Waiting for ${formatDuration(installCountdown)} (--install-countdown) ` +
+            `to elapse before we install, in case we're close to being able to purchase more augmentations...`;
+        ns.toast(`Heads up: faction-manager plans to reset in ${formatDuration(state.installCountdown - Date.now())}`, 'info');
+        writeInstallState(ns, state);
+        return { status: resetStatus, install_countdown: state.installCountdown };
+    }
+    await ns.write("reserve.txt", 0, "w");
+    if ((status.affordable_count_ex_nf + status.affordable_count_nf) > 0) {
+        log(ns, `INFO: Buying the selected augmentation batch immediately before install handoff.`, true, 'info');
+        await purchaseManagedAugs(ns, state, bn8FrequentInstall ? "no-neuroflux" : (cashRootReady ? "cashroot-only" : null));
+    }
+    return { status: launchAscendForManagedInstall(ns, status, summary, cashRootReady), installing: true };
 }
 
 /** Ram-dodge getting updated player info.
@@ -258,7 +692,8 @@ async function getPlayerInfo(ns) {
 /** @param {NS} ns
  *  @returns {Promise<GangGenInfo|boolean>} Gang information, if we're in a gang, or False */
 async function getGangInfo(ns) {
-    return await getNsDataThroughFile(ns, 'ns.gang.inGang() ? ns.gang.getGangInformation() : false', '/Temp/gang-stats.txt')
+    return await getNsDataThroughFile(ns, 'ns.gang.inGang() ? ns.gang.getGangInformation() : false',
+        '/Temp/gang-stats.txt');
 }
 
 // Helper function to make multi names shorter for display in a table
@@ -307,12 +742,12 @@ async function getSingularityDict(ns, command, listItems) {
 async function updateFactionData(ns, factionsToOmit) {
     // Gather a list of all faction names to collect information about. Start with any player joined and invited factions
     const invitations = (/**@returns {string[]}*/() => null)() ??
-        await getNsDataThroughFile(ns, 'ns.singularity.checkFactionInvitations()');
+        await getNsDataThroughFile(ns, 'ns.singularity.checkFactionInvitations()', '/Temp/ns-singularity-checkFactionInvitations.txt');
     factionNames = joinedFactions.concat(invitations);
     // Add in factions the user hasn't seen. All factions by default, or a small subset of easy-access factions if --hide-locked-factions is set
     factionNames.push(...(options['hide-locked-factions'] ? easyAccessFactions : allFactions).filter(f => !factionNames.includes(f)));
     // Unless "all factions" is requested, omit factions that are in no way accessible on this reset
-    if (!(options.a || options.all)) {
+    if (!options.all) {
         if (!(13 in effectiveSourceFiles)) factionsToOmit.push("Church of the Machine God");
         if (!(6 in effectiveSourceFiles || 7 in effectiveSourceFiles)) factionsToOmit.push("Bladeburners");
     }
@@ -330,6 +765,8 @@ async function updateFactionData(ns, factionsToOmit) {
     // Need information about our gang to work around a TRP bug - gang faction appears to have it available, but it's not (outside of BN2)
     if (gangFaction && bitNode != 2)
         dictFactionAugs[gangFaction] = dictFactionAugs[gangFaction]?.filter(a => a != "The Red Pill");
+    if (dictFactionAugs[shadowsOfAnarchy])
+        dictFactionAugs[shadowsOfAnarchy] = dictFactionAugs[shadowsOfAnarchy].filter(a => a == soaWksHarmonizer);
 
     factionData = Object.fromEntries(factionNames.map(faction => [faction, new FactionData(
         faction, invitations.includes(faction), joinedFactions.includes(faction), dictFactionReps[faction], dictFactionFavors[faction], dictFactionAugs[faction]
@@ -350,9 +787,6 @@ class FactionData {
         this.joined = joined;
         this.reputation = factionRep || 0;
         this.favor = factionFavor;
-        this.donationsUnlocked = factionFavor >= favorToDonate &&
-            // As a rule, cannot donate to gang factions or any of the below factions - need to use other mechanics to gain rep.
-            ![gangFaction, ...factionsWithoutDonation].includes(faction);
         this.augmentations = augmentationNames;
     }
     /** @param {boolean} includeNf Whether to include NeuroFlux (generally offered by all factions) in the list of augmentations offered.
@@ -389,7 +823,7 @@ async function updateAugmentationData(ns) {
         aug, dictAugRepReqs[aug], dictAugPrices[aug], dictAugStats[aug], dictAugPrereqs[aug]
     )]));
     /** Helper function which will propagate the "desired" (priority) status to any dependencies of desired augs.
-     * Note when --all-factions mode is not enabled, it's possible some prereqs will be missing from our list
+     * Note when --all mode is not enabled, it's possible some prereqs will be missing from our list
      * @param {AugmentationData} aug */
     function propagateDesired(aug) {
         if (!aug.desired || !aug.prereqs) return;
@@ -453,9 +887,9 @@ class AugmentationData {
     canAfford() {
         return this.joinedFactionsWithAug().some(f => f.reputation >= this.reputation);
     }
-    /** @returns {boolean} Whether there is some joined faction with the augmentation that we've unlocked reputation donations with */
+    /** @returns {boolean} Whether this augmentation can be unlocked with a donation in the current automation path. */
     canAffordWithDonation() {
-        return this.joinedFactionsWithAug().some(f => f.donationsUnlocked);
+        return shouldAllowDonationForAug(this) && this.joinedFactionsWithAug().some(f => canDonateToFaction(f));
     }
     /** @returns {string} Get the name of the joined faction from which we should purchase this augmentation. */
     getFromJoined() {
@@ -463,18 +897,12 @@ class AugmentationData {
         const augFactions = this.joinedFactionsWithAug();
         if (this.name != strNF)
             return (augFactions.filter(f => f.reputation >= this.reputation)[0] || // Any faction we can buy it from
-                augFactions.filter(f => f.donationsUnlocked).sort((a, b) => getReqDonationForAug(this, a) - getReqDonationForAug(this, b))[0] || // Cheapest donation for aug
+                (shouldAllowDonationForAug(this) ? augFactions.filter(f => canDonateToFaction(f))
+                    .sort((a, b) => getReqDonationForAug(this, a) - getReqDonationForAug(this, b))[0] : null) ||
                 augFactions.sort((a, b) => b.reputation - a.reputation)[0] || // Faction we are closest to being able to get it from (most rep)
                 augFactions[0])?.name; // First faction in our faction list order (which should be ordered by priority)
 
-        // The "Neuroflux" augmentation uses a different approach.
-        // Prefer to purchase NF first from whatever joined factions have donations unlocked (allow us to continuously donate for more), next by faction with the most current reputation.
-        return augFactions.sort((a, b) => // This sort order prefers factions that support donations over ones that already have sufficient rep for one or more NF levels.
-            ((b.donationsUnlocked ? 1 : 0) - (a.donationsUnlocked ? 1 : 0)) || (b.reputation - a.reputation))[0]?.name;
-        // This (disabled) sort order prefers factions that already have enough reputation to buy at least one level of NF (whether they support donations or not)
-        // augFactions.sort((a, b) => ((b.reputation >= this.reputation ? 1 : 0) - (a.reputation >= this.reputation ? 1 : 0)) ||
-        //    ((b.donationsUnlocked ? 1 : 0) - (a.donationsUnlocked ? 1 : 0)) || (b.reputation - a.reputation))[0]?.name;
-        // TODO: #145 Is there a way to first buy NF from factions that already have enough rep, before switching to a different faction that supports donations?
+        return augFactions.sort((a, b) => b.reputation - a.reputation)[0]?.name;
     }
     /** @returns {string} A formatted row of information for this augmentation */
     toString() {
@@ -486,7 +914,7 @@ class AugmentationData {
                 .map(prop => shorten(prop) + ': ' + Math.round((this.stats[prop] + Number.EPSILON) * 100) / 100).join(', ') + ` }`));
         const factionName = this.getFromJoined() || this.getFromAny;
         const fCreep = Math.max(0, factionName.length - factionColWidth);
-        const budget = playerData.money + stockValue;
+        const budget = Math.max(0, playerData.money + stockValue - getReservedCash());
         const augNameShort = this.displayName.length <= (augColWidth - fCreep) ? this.displayName :
             `${this.displayName.slice(0, Math.ceil(augColWidth / 2 - 3 - fCreep))}...${this.displayName.slice(this.displayName.length - Math.floor(augColWidth / 2))}`;
         return `${this.desired ? '*' : ' '} Price: ${formatMoney(this.price, 4).padEnd(7)} ${this.price <= budget ? '✓' : '✗'}  ` +
@@ -538,15 +966,6 @@ async function joinFactions(ns, forceJoinFactions) {
     return joined;
 }
 
-/** Compute how much money must be donated to recieve the specified reputation amount.
- * @param {number} rep */
-let getCostOfReputation = (rep) => Math.ceil(1e6 * rep / playerData.mults.faction_rep / bitNodeMults.FactionWorkRepGain);
-/** Compute how much money must be donated to the faction to attain the specified reputation amount with this faction. Takes into account the current faction rep.
- * @param {number} rep_needed @param {FactionData|string} factionOrFactionName */
-let getReqDonationForRep = (rep_needed, factionOrFactionName) => getCostOfReputation(Math.max(0, rep_needed - (factionOrFactionName.name ? factionOrFactionName : factionData[factionOrFactionName]).reputation));
-/** Compute how much money must be donated to the faction to afford an augmentation. Faction can be either a faction object, or faction name
- * @param {AugmentationData} aug @param {FactionData|string} factionOrFactionName */
-let getReqDonationForAug = (aug, factionOrFactionName) => getReqDonationForRep(aug.reputation, factionOrFactionName || aug.getFromJoined());
 /** @param {AugmentationData[]} augPurchaseOrder The augmentations we wish to purchase in order of purchase.
  * @returns The total cost of purchasing all these augmentations in the specified order */
 let getTotalCost = (augPurchaseOrder) => augPurchaseOrder.reduce((total, aug, i) => total + aug.price * augCountMult ** i, 0);
@@ -558,53 +977,50 @@ let augSortOrder = (a, b) =>
     (b.price - a.price) || (b.reputation - a.reputation) ||
     (b.desired != a.desired ? (a.desired ? -1 : 1) : a.name.localeCompare(b.name));
 
+/** @param {AugmentationData} a @param {AugmentationData} b */
+let cheapAugSortOrder = (a, b) =>
+    // BN8 is cash-constrained, so buy cheap augmentations first to lock in frequent resets.
+    (a.name == strNF && b.name == strNF ? a.price - b.price : 0) ||
+    (a.price - b.price) || (a.reputation - b.reputation) ||
+    (b.desired != a.desired ? (a.desired ? -1 : 1) : a.name.localeCompare(b.name));
+
 /** Sort augmentations such that they are in order of price, except when there are prerequisites to worry about
  * @param {NS} ns
  * @param {AugmentationData[]} augs augmentations to sort
  * @returns {AugmentationData[]} The input array of augs, which were sorted in place */
 function sortAugs(ns, augs = []) {
-    augs.sort(augSortOrder);
-    // Bubble up prerequisites to the top
-    for (let i = 0; i < augs.length; i++) {
-        for (let j = 0; j < augs[i].prereqs.length; j++) {
-            const prereqIndex = augs.findIndex(a => a.name == augs[i].prereqs[j]);
-            if (prereqIndex === -1 /* Already bought */ || prereqIndex < i /* Already sorted up */) continue;
-            augs.splice(i, 0, augs.splice(prereqIndex, 1)[0]);
-            i -= 1; // Back up i so that we revisit the prerequisites' own prerequisites
+    const remaining = augs.slice().sort(bitNode == 8 ? cheapAugSortOrder : augSortOrder);
+    const sorted = [];
+    const ownedOrSorted = new Set(simulatedOwnedAugmentations);
+
+    while (remaining.length > 0) {
+        const nextIndex = remaining.findIndex(aug => aug.prereqs.every(prereq => ownedOrSorted.has(prereq)));
+        if (nextIndex === -1) {
+            log(ns, `WARNING: Could not find any augmentation with satisfied prerequisites while sorting purchase order. Keeping remaining order as-is.`);
+            sorted.push(...remaining);
             break;
         }
+        const nextAug = remaining.splice(nextIndex, 1)[0];
+        sorted.push(nextAug);
+        ownedOrSorted.add(nextAug.name);
     }
-    // TODO: Logic below is **almost** working, except that the "batch detection" is flawed - it does not detect when multiple separate
-    //       "trees" of dependencies with a common root are side-by-side (e.g. "Embedded Netburner Module" tree). Until fixed, we cannot bubble.
-    //return augs;
-    // Since we are no longer most-expensive to least-expensive, the "ideal purchase order" is more complicated.
-    // So now see if moving each chunk of prereqs down a slot reduces the overall price.
-    let initialCost = getTotalCost(augs);
-    let totalMoves = 0;
-    for (let i = augs.length - 1; i > 0; i--) {
-        let batchLengh = 1; // Look for a "batch" of prerequisites, evidenced by augs above this one being cheaper instead of more expensive
-        while (i - batchLengh >= 0 && augs[i].price > augs[i - batchLengh].price) batchLengh++;
-        if (batchLengh == 1) continue; // Not the start of a batch of prerequisites
-        if (augs[i].prereqs.includes(augs[i - batchLengh])) continue;
-        //log(ns, `Detected a batch of length ${batchLengh} from ${augs[i - batchLengh + 1].name} to ${augs[i].name}`);
-        let moved = 0, bestCost = initialCost;
-        while (i + moved + 1 < augs.length) { // See if promoting augs from below the batch to above the batch reduces the overall cost
-            let testOrder = augs.slice(), moveIndex = i + moved + 1, insertionIndex = i - batchLengh + 1 + moved;
-            testOrder.splice(insertionIndex, 0, testOrder.splice(moveIndex, 1)[0]); // Try moving it above the batch
-            let newCost = getTotalCost(testOrder);
-            //log(ns, `Cost would change by ${((newCost - bestCost) / bestCost * 100).toPrecision(2)}% from ${formatMoney(bestCost)} to ${formatMoney(newCost)} by buying ${augs[moveIndex].name} before ${augs[insertionIndex].name}`);
-            if (bestCost < newCost) break; // If the cost is worse or the same, stop shifting augs
-            //log(ns, `Cost reduced by ${formatMoney(bestCost - newCost)} from ${formatMoney(bestCost)} to ${formatMoney(newCost)} by buying ${augs[moveIndex].name} before ${augs[insertionIndex].name}`);
-            bestCost = newCost;
-            augs.splice(insertionIndex, 0, augs.splice(moveIndex, 1)[0]); // Found a cheaper sort order - lock in the move!
-            moved++;
-        }
-        i = i - batchLengh + 1; // Decrement i to past the batch so it doesn't try to change the batch's own order
-        totalMoves += moved;
-    }
-    let finalCost = getTotalCost(augs);
-    if (totalMoves > 0) log(ns, `Cost reduced by ${formatMoney(initialCost - finalCost)} (from ${formatMoney(initialCost)} to ${formatMoney(finalCost)}) by bubbling ${totalMoves} augs up above batches of dependencies.`);
+
+    augs.splice(0, augs.length, ...sorted);
     return augs;
+}
+
+/** @param {AugmentationData[]} sortedAugs */
+function getAffordablePrefixByPurchaseOrder(sortedAugs, budget) {
+    const affordable = [];
+    let total = 0;
+    for (const aug of sortedAugs) {
+        const nextCost = aug.price * augCountMult ** affordable.length;
+        if (total + nextCost > budget)
+            break;
+        affordable.push(aug);
+        total += nextCost;
+    }
+    return affordable;
 }
 
 /** @param {NS} ns
@@ -622,14 +1038,14 @@ async function manageUnownedAugmentations(ns, ignoredAugs) {
         await manageFilteredSubset(ns, outputRows, 'Unavailable', unavailableAugs, true, false);
     // Prepare and display a little legend of what symbols in our augmentation list mean
     const legendTitle = 'Optimized Purchase Order Legend';
-    outputRows.push(legendTitle, '-'.repeat(legendTitle.length), "✓  Can afford", "✗  Cannot afford", "$  Can donate for rep",
+    outputRows.push(legendTitle, '-'.repeat(legendTitle.length), "✓  Can afford", "$  Can donate for Red Pill rep", "✗  Cannot afford",
         `*  Desired aug/stats (${desiredStatsFilters.join(", ")})`, '-'.repeat(legendTitle.length));
     const countAvailable = availableAugs?.length || 0; // Get a count of available augs (including NF) to determine whether to prepare a purchase order
     // Display available augs. We use the return value to "lock in" the new sort order. If enabled, subsequent tables are displayed if the filtered sort order changes.
     availableAugs = ignorePlayerData ? unavailableAugs : // Note: We omit NF from available augs here because as many as we can afford are added at the end.
         await manageFilteredSubset(ns, outputRows, 'Available', availableAugs.filter(aug => aug.name != strNF), true);
     if (countAvailable > 0) {
-        let augsWithRep = availableAugs.filter(aug => aug.canAfford() || (aug.canAffordWithDonation() && !options['disable-donations']));
+        let augsWithRep = availableAugs.filter(aug => aug.canAfford() || aug.canAffordWithDonation());
         let desiredAugs = availableAugs.filter(aug => aug.desired);
         if (augsWithRep.length > desiredAugs.length) {
             augsWithRep = await manageFilteredSubset(ns, outputRows, 'Within Rep', augsWithRep)
@@ -649,11 +1065,18 @@ async function manageUnownedAugmentations(ns, ignoredAugs) {
             (options.purchase ? '' : ' Run with the --purchase flag to make the purchase.'), printToTerminal);
 }
 
-/** Helper to compute the total rep cost for augmentations, including the cost of donating for access.
+/** Helper to compute the total purchase cost for augmentations, including Red Pill donations when available.
  * @param {AugmentationData[]} sortedAugs The augmentations we're purchasing, in the order we'll puchase them
  * @returns {[{[factionName: string]: number},number,number]} */
 function computeCosts(sortedAugs) {
-    const repCostByFaction = computeAugsRepReqDonationByFaction(sortedAugs);
+    const repCostByFaction = {};
+    for (const aug of sortedAugs) {
+        if (!shouldAllowDonationForAug(aug)) continue;
+        const faction = factionData[aug.getFromJoined()];
+        const reqDonation = getReqDonationForAug(aug, faction);
+        if (reqDonation > 0)
+            repCostByFaction[faction.name] = Math.max(repCostByFaction[faction.name] || 0, reqDonation);
+    }
     const totalRepCost = Object.values(repCostByFaction).reduce((t, r) => t + r, 0);
     const totalAugCost = getTotalCost(sortedAugs);
     return [repCostByFaction, totalRepCost, totalAugCost];
@@ -679,6 +1102,12 @@ function filterMissingPrereqs(ns, subset) {
         // If any augs were removed, we mut loop back to the start and see if that means other augs need removing
     } while (subsetLength !== subset.length);
     return subset;
+}
+
+function getConcreteTargetAugsNotInPurchaseOrder() {
+    const plannedNonNf = new Set(purchaseableAugs.filter(aug => aug.name != strNF).map(aug => aug.name));
+    return Object.values(augmentationData)
+        .filter(aug => aug.name != strNF && !aug.owned && aug.desired && !plannedNonNf.has(aug.name));
 }
 
 /** Helper to generate outputs for different subsets of the augmentations, each in optimal sort order
@@ -711,11 +1140,18 @@ async function manageFilteredSubset(ns, outputRows, subsetName, subset, printLis
 
 /** @param {NS} ns
  * Prepares a "purchase order" of augs that we can afford.
- * Note: Stores this info in global properties `purchaseableAugs` and `purchaseFactionDonations` so that a final action in the main method will do the purchase. */
+ * Note: Stores this info in global properties `purchaseableAugs` and `purchaseFactionRepCosts` so that a final action in the main method will do the purchase. */
 async function managePurchaseableAugs(ns, outputRows, accessibleAugs) {
     // Refresh player data to get an accurate read of current money
     playerData = await getPlayerInfo(ns);
-    const budget = playerData.money + stockValue;
+    const budget = Math.max(0, playerData.money + stockValue - getReservedCash());
+    if (shouldOnlyBuyTrpInBn8()) {
+        const trp = augmentationData[augTRP];
+        accessibleAugs = accessibleAugs.filter(aug => aug.name == augTRP);
+        if (accessibleAugs.length == 0 && trp?.getFromJoined() != null && trp.canAfford())
+            accessibleAugs = [trp];
+        outputRows.push(`INFO: BN8 Red Pill mode: preserving cash and reset progress. Only ${augTRP} will be considered for purchase.`);
+    }
     let totalRepCost, totalAugCost, dropped, restart;
     // We will make every effort to keep "priority" augs in the purchase order, but start dropping them if we find we cannot afford them all
     const inaccessiblePriorityAugs = priorityAugs.filter(name => {
@@ -727,7 +1163,9 @@ async function managePurchaseableAugs(ns, outputRows, accessibleAugs) {
         restart = false; // Flag as to whether we need to loop again with different starting set of priority augs
         dropped = [];
         purchaseableAugs = filterMissingPrereqs(ns, accessibleAugs.slice().filter(a => !droppedPriorityAugs.includes(a.name) && a.price + getReqDonationForAug(a) <= budget));
-        [purchaseFactionDonations, totalRepCost, totalAugCost] = computeCosts(purchaseableAugs);
+        if (bitNode == 8)
+            purchaseableAugs = getAffordablePrefixByPurchaseOrder(sortAugs(ns, purchaseableAugs), budget);
+        [purchaseFactionRepCosts, totalRepCost, totalAugCost] = computeCosts(purchaseableAugs);
         // Remove the most expensive augmentation until we can afford all that remain
         while (totalAugCost + totalRepCost > budget && purchaseableAugs.length > 0) {
             let mostExpensiveAug = purchaseableAugs.filter(a => !priorityAugs.includes(a.name)).slice().sort((a, b) => b.price - a.price)[0];
@@ -741,7 +1179,7 @@ async function managePurchaseableAugs(ns, outputRows, accessibleAugs) {
             }
             let costBefore = getCostString(totalAugCost, totalRepCost);
             purchaseableAugs = sortAugs(ns, purchaseableAugs.filter(aug => aug !== mostExpensiveAug));
-            [purchaseFactionDonations, totalRepCost, totalAugCost] = computeCosts(purchaseableAugs);
+            [purchaseFactionRepCosts, totalRepCost, totalAugCost] = computeCosts(purchaseableAugs);
             let costAfter = getCostString(totalAugCost, totalRepCost);
             dropped.unshift({ aug: mostExpensiveAug, costBefore, costAfter });
             log(ns, `Dropping aug from the purchase order: \"${mostExpensiveAug.name}\". New total cost: ${costAfter}`);
@@ -766,95 +1204,77 @@ async function managePurchaseableAugs(ns, outputRows, accessibleAugs) {
 
     // NEXT STEP: Add as many NeuroFlux levels to our purchase as we can (unless disabled)
     if (options['neuroflux-disabled']) return;
+    const remainingConcreteTargets = getConcreteTargetAugsNotInPurchaseOrder();
+    if (remainingConcreteTargets.length > 0) {
+        outputRows.push(`INFO: Not buying ${strNF} yet. ${remainingConcreteTargets.length} concrete target augmentation(s) remain, ` +
+            `so ${strNF} is reserved for leftover cash after goals are complete: ` +
+            remainingConcreteTargets.slice(0, 8).map(aug => `"${aug.name}"`).join(", ") +
+            (remainingConcreteTargets.length > 8 ? `, ...` : ''));
+        if (nextUpAug) outputRows.push(nextUpAug);
+        return;
+    }
     const augNf = augmentationData[strNF];
     // We can reverse-engineer our current NeuroFlux level by looking at its current price, and knowing its cost scales at x1.14 per level.
     nfLevelPurchased = Math.round(Math.log(augNf.price / (augCountMult ** numAugsAwaitingInstall * 750000 * bitNodeMults.AugmentationMoneyCost)) / Math.log(1.14));
     let nextNfLevel = nfLevelPurchased + 1;
     let getFrom = augNf.getFromJoined();
     // If No currently joined factions can provide us with the next level of Neuroflux, look for the best joined **or unjoined** faction to get NF from.
-    if (!augNf.canAfford() && !augNf.canAffordWithDonation()) {
+    if (!augNf.canAfford()) {
         outputRows.push(`Cannot purchase any ${strNF}. The next level (${nextNfLevel}) requires ${formatNumberShort(augNf.reputation)} reputation, but ` +
             (!getFrom ? `it isn't being offered by any of our factions` : `the best faction (${getFrom}) has insufficient rep (${formatNumberShort(factionData[getFrom].reputation)}).`));
-        // Prefer factions that support donating for reputation, otherwise grinding rep takes a long time.
-        const factionSort = (a, b) => ((b.donationsUnlocked ? 1 : 0) - (a.donationsUnlocked ? 1 : 0)) || (b.favor - a.favor);
+        const factionSort = (a, b) => (b.reputation - a.reputation) || (b.favor - a.favor);
         const factionsWithAug = Object.values(factionData).filter(f => f.augmentations.includes(augNf.name)).sort(factionSort);
         const factionsWithAugAndInvite = factionsWithAug.filter(f => f.invited || f.joined).sort(factionSort);
         const factionWithMostFavor = factionsWithAugAndInvite[0] ?? factionsWithAug[0];
         let joined = 0;
         if (getFrom != factionsWithAug[0].name && factionsWithAug[0] != factionsWithAugAndInvite[0])
-            outputRows.push(`SUGGESTION: Earn an invitation to faction ${factionsWithAug[0].name} to make it easier to get rep for ${strNF} since it has the most favor (${factionsWithAug[0].favor}).`);
-        else if (factionsWithAug[0].joined && !factionsWithAug[0].donationsUnlocked)
-            outputRows.push(`SUGGESTION: Do some work for faction ${factionsWithAug[0].name} to quickly earn rep for ${strNF} since it has the most favor (${factionsWithAug[0].favor}).`);
+            outputRows.push(`SUGGESTION: Earn an invitation to faction ${factionsWithAug[0].name} to get rep for ${strNF}.`);
+        else if (factionsWithAug[0].joined)
+            outputRows.push(`SUGGESTION: Do infiltration/work for faction ${factionsWithAug[0].name} to earn rep for ${strNF}.`);
         else if (!getFrom || (factionData[getFrom].favor < factionWithMostFavor.favor && factionWithMostFavor.invited)) {
-            outputRows.push(`Attempting to join faction ${factionWithMostFavor.name} to make it easier to earn rep for ${strNF} since it has the most favor (${factionWithMostFavor.favor}).`);
+            outputRows.push(`Attempting to join faction ${factionWithMostFavor.name} to make it easier to earn rep for ${strNF}.`);
             joined = await joinFactions(ns, [factionWithMostFavor.name]);
-            if (!joinedFactions.includes(factionWithMostFavor.name)) {
-                const invitedFactionsWithDonation = factionsWithAugAndInvite.filter(f => f.donationsUnlocked).map(f => f.name);
-                if (invitedFactionsWithDonation.length > 0) {
-                    outputRows.push(`Failed to join ${factionWithMostFavor.name}. Attempting to join any factions with whom we have enough favour to donate: ${invitedFactionsWithDonation.join(", ")}.`);
-                    joined = await joinFactions(ns, invitedFactionsWithDonation);
-                } else
-                    outputRows.push(`Failed to join ${factionWithMostFavor.name}. NeuroFlux will not be accessible.`);
-            }
+            if (!joinedFactions.includes(factionWithMostFavor.name))
+                outputRows.push(`Failed to join ${factionWithMostFavor.name}. NeuroFlux will not be accessible.`);
             // If after the above potential attempt to join a faction offering NF we still can't afford it, we're done here
             getFrom = augNf.getFromJoined();
             if (!getFrom) return log(ns, "Cannot buy any NF due to no joined or joinable factions offering it.");
         }
-        if (!augNf.canAfford() && !augNf.canAffordWithDonation())
-            log(ns, `Cannot buy any NF due to best provider faction ${getFrom} having insufficient rep, and donations are not unlocked.`);
+        if (!augNf.canAfford())
+            log(ns, `Cannot buy any NF due to best provider faction ${getFrom} having insufficient rep.`);
         else if (joined)
             outputRows.push(`SUCCESS: Joined ${joined} factions just to gain access to additional NeuroFlux levels.`);
     }
-    if (getFrom && !factionData[getFrom].donationsUnlocked) {
-        // TODO: If the faction with the most reputation does not suport dontating for additional rep, and another faction with less rep does,
-        //       we should be able to test both and see which one would let us buy the most additional levels of NF given our current money.
-        if (factionData[getFrom].favor >= favorToDonate)
-            outputRows.push(`WARNING: The current faction (${getFrom}) with the most rep for buying NeuroFlux levels does not support donating for reputation. ` +
-                `Until logic is built to handle this, consider joining one or more factions that support donating for reputation.`);
-    }
-    // Make note of any augmentations at the end of the purchase order list that are cheaper than NF. We will insert NF above them.
-    // Note, we cannot simply count all augmentations cheaper than NF, as some may be prerequisites higher up the list.
-    let nfAppendPosition = 0;
-    for (let i = purchaseableAugs.length - 1; i >= 0 && purchaseableAugs[i].price < augNf.price; i--)
-        nfAppendPosition--;
     // Start adding as many NeuroFlux levels as we can afford
     let nfPurchased = purchaseableAugs.filter(a => a.name === augNf.name).length;
     const augNfFaction = factionData[augNf.getFromJoined()];
-    if (augNfFaction && (augNf.canAfford() || augNf.canAffordWithDonation()))
+    if (augNfFaction && augNf.canAfford())
         log(ns, `Getting NF from faction ${augNfFaction.name} (rep: ${formatNumberShort(augNfFaction.reputation)}). Price of next NF (Level ${nextNfLevel}) is ` +
             `${formatMoney(augNf.price)}, requires reputation: ${formatNumberShort(augNf.reputation)} ` +
-            `(have ${formatNumberShort(augNfFaction.reputation)}, donate ${formatNumberShort(getReqDonationForRep(augNf.reputation, augNfFaction))})`);
+            `(have ${formatNumberShort(augNfFaction.reputation)})`);
     let nextUpNf; // Will tell the user when they will unlock the next NF level
     while (augNfFaction && nfPurchased < 200) { // Limit to 200 to avoid breaking the game if near infinite money.
         const nextNfCost = augNf.price * (nfCountMult ** nfPurchased) * (augCountMult ** purchaseableAugs.length);
         const nextNfRep = augNf.reputation * (nfCountMult ** nfPurchased);
-        const currentNfFactionDonation = purchaseFactionDonations[augNfFaction.name] || 0;
-        const nextNfTotalRepDonation = (nextNfRep <= augNfFaction.reputation) ? 0 : getReqDonationForRep(nextNfRep, augNfFaction);
-        const nextNfRepCost = Math.max(0, nextNfTotalRepDonation - currentNfFactionDonation); // Compute the incremental cost of donating for rep
+        const nextNfRepCost = 0;
         const totalCostWithNextNf = totalAugCost + nextNfCost + totalRepCost + nextNfRepCost;
         log(ns, `Adding ${nfPurchased + 1} NF (Level ${nextNfLevel}) Requires ${formatNumberShort(nextNfRep, 4)} reputation, ` +
             `would cost another ${getCostString(nextNfCost, nextNfRepCost)} for a ` +
             `total of ${getCostString(totalAugCost + nextNfCost, totalRepCost + nextNfRepCost)}`);
-        if (totalCostWithNextNf > budget || nextNfRep > augNfFaction.reputation && !augNfFaction.donationsUnlocked) {
+        if (totalCostWithNextNf > budget || nextNfRep > augNfFaction.reputation) {
             nextUpNf = `Next NF (L${nextNfLevel}) will be available at:`.padEnd(37) +
                 ` ${getCostString(totalAugCost + nextNfCost, totalRepCost + nextNfRepCost)}  Money (` +
                 `${(totalCostWithNextNf > budget ? '✗' : '✓')}) and ${formatNumberShort(nextNfRep)} Reputation with "${augNfFaction.name}" (` +
-                (nextNfRep > augNfFaction.reputation && !augNfFaction.donationsUnlocked ? '✗' : '✓') +
-                ` have ${formatNumberShort(augNfFaction.reputation)}` + (nextNfRep <= augNfFaction.reputation ? '' :
-                    augNfFaction.donationsUnlocked ? ', can donate' : ', donations unavailable') + `)`;
+                (nextNfRep > augNfFaction.reputation ? '✗' : '✓') +
+                ` have ${formatNumberShort(augNfFaction.reputation)})`;
             break; // If we cannot afford the next NF, break
         }
-        // Otherwise, add the next NF to our purchase order, and see if we can afford any more.
-        // TODO: #145 Buy NF from different factions as we move from ones with enough rep to ones that support donation
+        // Otherwise, add the next NF to the end of our purchase order as leftover spend after concrete goals.
         const nextNfPrice = augNf.price * (nfCountMult ** nfPurchased); // Note this should be the base price, before scaling for number of augs purchased
         const nfClone = new AugmentationData(augNf.name, nextNfRep, nextNfPrice, augNf.stats, augNf.prereqs); // { ...augNf };
         nfClone.displayName += ` Level ${nextNfLevel}`
-        // Note, insert all NF purchases after the current NF purchase, in front of all augs cheaper than the first NF
-        purchaseableAugs.splice(purchaseableAugs.length + nfAppendPosition, 0, nfClone);
+        purchaseableAugs.push(nfClone);
         totalAugCost += nextNfCost;
-        const newDonationForRep = Math.max(currentNfFactionDonation, nextNfTotalRepDonation);
-        if (newDonationForRep > 0) purchaseFactionDonations[augNfFaction.name] = newDonationForRep;
-        totalRepCost = Object.values(purchaseFactionDonations).reduce((t, r) => t + r, 0);
         nextNfLevel++;
         nfPurchased++;
     }
@@ -865,64 +1285,73 @@ async function managePurchaseableAugs(ns, outputRows, accessibleAugs) {
     if (nextUpNf) outputRows.push(nextUpNf);
 };
 
-/** Find out the optimal set of factions and rep-donations required to access them
- * @param {NS} ns
- * @param {AugmentationData[]} augmentations
- * @returns {{[factionName: string]: number}} The amount of reputation we need to donate to each faction to purchase the specified augmentations. */
-function computeAugsRepReqDonationByFaction(augmentations) {
-    const repCostByFaction = (/**@returns {{[factionName: string]: number}}*/() => ({}))();
-    for (const aug of augmentations) {
-        if (!(aug instanceof AugmentationData)) throw new Error("Wrong type: " + aug.constructor.name + JSON.stringify(aug));
-        let faction = factionData[aug.getFromJoined() || aug.getFromAny];
-        if (!faction.donationsUnlocked) continue; // getFromJoined() already ensures that we don't resort to faction requiring donations unless we must (and can)
-        let reqDonation = getReqDonationForAug(aug, faction);
-        // See if any other faction we're already planning to donate to offers the same augmentation, so we can avoid donating to multiple factions
-        // Use the alternative faction if we're already planning on donating this much to them, or if they're closer to the donation requirement than this faction currently is
-        let fDonationsIndex = Object.keys(repCostByFaction).findIndex(f => f == faction.name);
-        let alternativeFaction = Object.keys(repCostByFaction).find((f, i) => f != faction.name && factionData[f].augmentations.includes(aug.name) && (
-            (repCostByFaction[f] >= reqDonation && (fDonationsIndex == -1 || i < fDonationsIndex)) || // We're donating the same or more to the other faction, and were planning on donating to it before this one
-            ((getReqDonationForAug(aug, f) - repCostByFaction[f]) < (reqDonation - (repCostByFaction[faction.name] || 0))))); // The amount we've committed to donating the other faction is closer to this requirement
-        if (alternativeFaction) {
-            log(_ns, `INFO: Using alternative faction "${alternativeFaction}" for "${aug.name}" rather than earlier faction "${faction.name}"`)
-            aug.getFromJoined = () => alternativeFaction; // Overwrite this function to always return the faction we've chosen to provide this augmentation
-            reqDonation = getReqDonationForAug(aug, alternativeFaction);
-            faction = factionData[alternativeFaction];
-        }
-        if (reqDonation > 0)
-            repCostByFaction[faction.name] = Math.max(repCostByFaction[faction.name] || 0, reqDonation);
-    }
-    return repCostByFaction;
-}
-
 /** @param {NS} ns
- * Donate any required rep and purchase the desired augmentations */
+ * Purchase the desired augmentations */
 async function purchaseDesiredAugs(ns) {
-    let totalRepCost = Object.values(purchaseFactionDonations).reduce((t, r) => t + r, 0);
-    let totalAugCost = getTotalCost(purchaseableAugs);
-    // Refresh player data to get an accurate read of current money
-    playerData = await getPlayerInfo(ns);
-    if (stockValue > 0)
-        return log(ns, `ERROR: For your own protection, --purchase will not run while you are holding stocks (current stock value: ${formatMoney(stockValue)}). ` +
-            `Liquidate your shares before running (run stockmaster.js --liquidate) or run this script with --ignore-stocks to override this.`, printToTerminal, 'error')
-    if (totalAugCost + totalRepCost > playerData.money && totalAugCost + totalRepCost > playerData.money * 1.1) // If we're way off affording this, something is probably wrong
-        return log(ns, `ERROR: Purchase order total cost (${getCostString(totalAugCost, totalRepCost)})` +
-            ` is far more than current player money (${formatMoney(playerData.money)}). Your money may have recently changed (It was ${formatMoney(startingPlayerMoney)} at startup), ` +
-            `or there may be a bug in purchasing logic.`, printToTerminal, 'error');
-    if (totalAugCost + totalRepCost > playerData.money) // If we're just a little off affording this, it could be because a bit of money was just spent? Just warn and buy what we can
-        log(ns, `WARNING: Purchase order total cost (${getCostString(totalAugCost, totalRepCost)})` +
-            ` is a bit more than current player money (${formatMoney(playerData.money)}). Did something else spend some money? ` +
-            `(We had ${formatMoney(startingPlayerMoney)} at startup). Will proceed with buying most of the purchase order.`, printToTerminal, 'warning');
-    // Donate to factions if necessary (using a ram-dodging script of course)
-    if (Object.keys(purchaseFactionDonations).length > 0 && Object.values(purchaseFactionDonations).some(v => v > 0)) {
-        if (await getNsDataThroughFile(ns, 'JSON.parse(ns.args[0]).reduce((success, o) => success && ns.singularity.donateToFaction(o.faction, o.repDonation), true)',
-            '/Temp/facman-donate.txt', [JSON.stringify(Object.keys(purchaseFactionDonations).map(f => ({ faction: f, repDonation: purchaseFactionDonations[f] })))]))
-            log(ns, `SUCCESS: Donated to ${Object.keys(purchaseFactionDonations).length} factions to gain access to desired augmentations.`, printToTerminal, 'success')
-        else
-            log(ns, `ERROR: One or more attempts to donate to factions for reputation failed. Go investigate!`, printToTerminal, 'error');
+    if (bitNode == 8 && purchaseableAugs.some(aug => aug.name == strNF)) {
+        purchaseableAugs = purchaseableAugs.filter(aug => aug.name != strNF);
+        log(ns, `INFO: Removed ${strNF} from the purchase order because BN8 must not buy it.`, printToTerminal);
     }
-    // Purchase desired augs (using a ram-dodging script of course)
+    let [purchaseCosts, totalRepCost, totalAugCost] = computeCosts(purchaseableAugs);
+    purchaseFactionRepCosts = purchaseCosts;
     if (purchaseableAugs.length == 0)
         return log(ns, `INFO: Cannot afford to buy any augmentations at this time.`, printToTerminal)
+    // Refresh player data to get an accurate read of current money
+    playerData = await getPlayerInfo(ns);
+    if (stockValue > 0 && totalAugCost + totalRepCost > 0) {
+        const pid = ns.run(getFilePath('stockmaster.js'), 1, '--liquidate');
+        if (!pid)
+            return log(ns, `ERROR: Could not launch stockmaster.js --liquidate while holding stocks worth ${formatMoney(stockValue)}.`, printToTerminal, 'error');
+        log(ns, `INFO: Liquidating stocks worth ${formatMoney(stockValue)} before purchasing augmentations.`, printToTerminal, 'info');
+        while (ns.isRunning(pid))
+            await ns.sleep(100);
+        stockValue = 0;
+        playerData = await getPlayerInfo(ns);
+    }
+    let spendableMoney = Math.max(0, playerData.money - getReservedCash());
+    while (purchaseableAugs.length > 0 && totalAugCost + totalRepCost > spendableMoney) {
+        let mostExpensiveAug = purchaseableAugs
+            .filter(a => a.name == strNF)
+            .slice()
+            .sort((a, b) => b.price - a.price)[0] || purchaseableAugs
+            .filter(a => !priorityAugs.includes(a.name))
+            .slice()
+            .sort((a, b) => b.price - a.price)[0];
+        if (!mostExpensiveAug) {
+            const prioritizedInOrder = priorityAugs.filter(name => purchaseableAugs.some(a => a.name == name));
+            if (prioritizedInOrder.length == 0) break;
+            mostExpensiveAug = purchaseableAugs.find(a => a.name == prioritizedInOrder[prioritizedInOrder.length - 1]);
+            log(ns, `WARNING: Post-liquidation budget is still too small, dropping lowest-priority priority aug "${mostExpensiveAug.name}".`, printToTerminal, 'warning');
+        } else {
+            log(ns, `INFO: Post-liquidation budget is smaller than the planned purchase order. Dropping "${mostExpensiveAug.name}" and recalculating.`, printToTerminal, 'info');
+        }
+        purchaseableAugs = sortAugs(ns, purchaseableAugs.filter(aug => aug !== mostExpensiveAug));
+        [purchaseFactionRepCosts, totalRepCost, totalAugCost] = computeCosts(purchaseableAugs);
+        spendableMoney = Math.max(0, playerData.money - getReservedCash());
+    }
+    if (purchaseableAugs.length == 0)
+        return log(ns, `INFO: Cannot afford to buy any augmentations at this time.`, printToTerminal)
+    if (totalAugCost + totalRepCost > spendableMoney && totalAugCost + totalRepCost > spendableMoney * 1.1) // If we're way off affording this, something is probably wrong
+        return log(ns, `ERROR: Purchase order total cost (${getCostString(totalAugCost, totalRepCost)})` +
+            ` is far more than current spendable player money (${formatMoney(spendableMoney)} of ${formatMoney(playerData.money)}). Your money may have recently changed (It was ${formatMoney(startingPlayerMoney)} at startup), ` +
+            `or there may be a bug in purchasing logic.`, printToTerminal, 'error');
+    if (totalAugCost + totalRepCost > spendableMoney) // If we're just a little off affording this, it could be because a bit of money was just spent? Just warn and buy what we can
+        log(ns, `WARNING: Purchase order total cost (${getCostString(totalAugCost, totalRepCost)})` +
+            ` is a bit more than current spendable player money (${formatMoney(spendableMoney)} of ${formatMoney(playerData.money)}). Did something else spend some money? ` +
+            `(We had ${formatMoney(startingPlayerMoney)} at startup). Will proceed with buying most of the purchase order.`, printToTerminal, 'warning');
+    if (Object.keys(purchaseFactionRepCosts).length > 0 && Object.values(purchaseFactionRepCosts).some(v => v > 0)) {
+        const donations = Object.keys(purchaseFactionRepCosts).map(f => ({ faction: f, amount: purchaseFactionRepCosts[f] }));
+        const donated = await getNsDataThroughFile(ns,
+            'JSON.parse(ns.args[0]).reduce((success, o) => success && ns.singularity.donateToFaction(o.faction, o.amount), true)',
+            '/Temp/facman-donate.txt', [JSON.stringify(donations)]);
+        if (donated) {
+            log(ns, `SUCCESS: Donated to ${donations.length} faction(s) to unlock ${augTRP} reputation.`, printToTerminal, 'success');
+            await updateFactionData(ns, options['ignore-faction'].map(f => f.replaceAll("_", " ")));
+        } else {
+            return log(ns, `ERROR: One or more faction donations failed. Aborting augmentation purchase.`, printToTerminal, 'error');
+        }
+    }
+    // Purchase desired augs (using a ram-dodging script of course)
     const purchased = await getNsDataThroughFile(ns, 'JSON.parse(ns.args[0]).reduce((total, o) => total + (ns.singularity.purchaseAugmentation(o.faction, o.augmentation) ? 1 : 0), 0)',
         '/Temp/facman-purchase-augs.txt', [JSON.stringify(purchaseableAugs.map(aug => ({ faction: aug.getFromJoined(), augmentation: aug.name })))]);
     if (purchased == purchaseableAugs.length)

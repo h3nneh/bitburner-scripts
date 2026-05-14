@@ -1,3 +1,4 @@
+// Based on: https://github.com/66Ton99/bitburner-scripts/blob/main/crime.js
 import { instanceCount, getNsDataThroughFile, formatDuration, formatNumberShort, tail } from './helpers.js'
 import { crimeForKillsKarmaStats } from './work-for-factions.js'
 
@@ -11,10 +12,19 @@ export async function main(ns) {
     ns.disableLog('sleep');
     let crime = ns.args.length == 0 ? undefined : ns.args.join(" "); // Need to join in case the crime has a space in it - it will be treated as two args
     tail(ns);
-    if (!crime || ns.args.includes(argFastCrimesOnly)) // More sophisticated auto-scaling crime logic
-        await crimeForKillsKarmaStats(ns, 0, 0, Number.MAX_SAFE_INTEGER, ns.args.includes(argFastCrimesOnly));
-    else // Simple crime loop for the specified crime
-        await legacyAutoCrime(ns, crime);
+    try {
+        if (!crime || ns.args.includes(argFastCrimesOnly)) // More sophisticated auto-scaling crime logic
+        try {
+            await crimeForKillsKarmaStats(ns, 0, 0, Number.MAX_SAFE_INTEGER, ns.args.includes(argFastCrimesOnly));
+        } catch (error) {
+            ns.print(`Auto crime selection failed, falling back to Mug: ${String(error)}`);
+            await legacyAutoCrime(ns, "Mug");
+        }
+        else // Simple crime loop for the specified crime
+            await legacyAutoCrime(ns, crime);
+    } catch (error) {
+        ns.tprint(`crime.js: Unable to automate crimes right now: ${String(error)}`);
+    }
 }
 
 /** @param {NS} ns **/
