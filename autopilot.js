@@ -104,12 +104,12 @@ const argsSchema = [ // The set of all command line arguments
     ['no-tail-windows', false], // Set to true to prevent the default behaviour of opening a tail window for certain launched scripts. (Doesn't affect scripts that open their own tail windows)
     ['tail-x', 675], // Default autopilot.js tail window x position.
     ['tail-y', 0], // Default autopilot.js tail window y position.
-    ['tail-width', 1400], // Default autopilot.js tail window width.
-    ['tail-height', 377], // Default autopilot.js tail window height.
+    ['tail-width', 600], // Default autopilot.js tail window width.
+    ['tail-height', 230], // Default autopilot.js tail window height.
     ['work-tail-x', 900], // Optional x position for the work-for-factions.js tail window.
     ['work-tail-y', 650], // Optional y position for the work-for-factions.js tail window.
-    ['work-tail-width', 1400], // Optional width for the work-for-factions.js tail window.
-    ['work-tail-height', 377], // Optional height for the work-for-factions.js tail window.
+    ['work-tail-width', 600], // Optional width for the work-for-factions.js tail window.
+    ['work-tail-height', 230], // Optional height for the work-for-factions.js tail window.
     ['cross-city-background-training', true], // Let work-for-factions start gym training in a gym city, then travel elsewhere for infiltration while training continues.
 ];
 
