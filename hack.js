@@ -727,7 +727,6 @@ export async function main(ns) {
             `/Temp/${command}-all.txt`, allHostNames);
     }
 
-    let dictInitialServerInfos = (/**@returns{{[serverName: string]: globalThis.Server;}}*/() => undefined)();
     let dictServerRequiredHackinglevels = (/**@returns{{[serverName: string]: number;}}*/() => undefined)();
     let dictServerNumPortsRequired = (/**@returns{{[serverName: string]: number;}}*/() => undefined)();
     let dictServerMinSecurityLevels = (/**@returns{{[serverName: string]: number;}}*/() => undefined)();
@@ -744,9 +743,6 @@ export async function main(ns) {
         dictServerRequiredHackinglevels = await getServersDict(ns, 'getServerRequiredHackingLevel');
         dictServerNumPortsRequired = await getServersDict(ns, 'getServerNumPortsRequired');
         dictServerGrowths = await getServersDict(ns, 'getServerGrowth');
-        // The "GetServer" object result is used with the formulas API (due to type checking that the parameter is a valid "server" instance)
-        // TODO: There is now a "ns.formulas.mockServer()" function that we can switch to
-        dictInitialServerInfos = await getServersDict(ns, 'getServer');
         // Also immediately retrieve the data which is occasionally updated
         await updateCachedServerData(ns);
         await refreshDynamicServerData(ns);
@@ -800,7 +796,20 @@ export async function main(ns) {
         constructor(ns, node) {
             this.ns = ns; // TODO: This might get us in trouble
             this.name = node;
-            this.server = dictInitialServerInfos[node];
+            // Lightweight mock for formulas API calls (ns.formulas.mockServer() shape).
+            // hackDifficulty, requiredHackingSkill, and moneyAvailable are set before each call.
+            this.server = {
+                hostname: node, ip: "", cpuCores: 1, isConnectedTo: false, ramUsed: 0, maxRam: 0,
+                organizationName: "", purchasedByPlayer: false, backdoorInstalled: false,
+                sshPortOpen: false, ftpPortOpen: false, smtpPortOpen: false,
+                httpPortOpen: false, sqlPortOpen: false, hasAdminRights: false,
+                serverGrowth: this.serverGrowth,
+                minDifficulty: dictServerMinSecurityLevels?.[node] ?? 1,
+                baseDifficulty: dictServerMinSecurityLevels?.[node] ?? 1,
+                moneyMax: dictServerMaxMoney?.[node] ?? 0,
+                hackDifficulty: 0, requiredHackingSkill: 0, moneyAvailable: 0,
+                numOpenPortsRequired: 0, openPortCount: 0,
+            };
             this.requiredHackLevel = dictServerRequiredHackinglevels[node];
             this.portsRequired = dictServerNumPortsRequired[node];
             this.serverGrowth = dictServerGrowths[node];
