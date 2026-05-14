@@ -47,6 +47,8 @@ let cachedCrimeStats, workByFaction; // Cache of crime statistics and which fact
 let task, lastStatusUpdateTime, lastPurchaseTime, lastPurchaseStatusUpdate, availableAugs, cacheExpiry,
     shockChance, lastRerollTime, bladeburnerCooldown, lastSleeveHp, lastSleeveShock; // State by sleeve
 let numSleeves, ownedSourceFiles, playerInGang, playerInBladeburner, bladeburnerCityChaos, bladeburnerContractChances, bladeburnerContractCounts, followPlayerSleeve;
+let cachedPlayerFactions = []; // Player's joined factions, refreshed each tick for multi-sleeve faction work
+let claimedFactionSlots = new Set(); // Factions currently worked by a sleeve this tick (one sleeve per faction)
 let options;
 
 export function autocomplete(data, _) {
@@ -63,7 +65,7 @@ export async function main(ns) {
     // Ensure the global state is reset (e.g. after entering a new bitnode)
     task = [], lastStatusUpdateTime = [], lastPurchaseTime = [], lastPurchaseStatusUpdate = [], availableAugs = [],
         cacheExpiry = [], shockChance = [], lastRerollTime = [], bladeburnerCooldown = [], lastSleeveHp = [], lastSleeveShock = [];
-    workByFaction = {}, cachedCrimeStats = {};
+    workByFaction = {}, cachedCrimeStats = {}, cachedPlayerFactions = [], claimedFactionSlots = new Set();
     playerInGang = playerInBladeburner = false;
     // Ensure we have access to sleeves
     ownedSourceFiles = await getActiveSourceFiles(ns);
@@ -226,6 +228,8 @@ async function mainLoop(ns) {
     if (!options['disable-bladeburner'] && !playerInBladeburner)
         playerInBladeburner = await getNsDataThroughFile(ns, 'ns.bladeburner.inBladeburner()');
     const playerWorkInfo = await getCurrentWorkInfo(ns);
+    cachedPlayerFactions = await getNsDataThroughFile(ns, 'ns.singularity.getJoinedFactions()');
+    claimedFactionSlots = new Set();
     if (!playerInGang) playerInGang = !(2 in ownedSourceFiles) ? false : await getNsDataThroughFile(ns, 'ns.gang.inGang()');
     let globalReserve = Number(ns.read("reserve.txt") || 0);
     const reserve = getEffectiveReserve(resetInfo, options['reserve'] ?? globalReserve);
@@ -374,17 +378,16 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
     // If player is currently working for faction or company rep, a sleeve can help him out (Note: Only one sleeve can work for a faction)
     if (i == followPlayerSleeve && playerWorkInfo.type == "FACTION" &&
         ns.formulas.work.factionGains(sleeve, ns.enums.FactionWorkType.security, 0).reputation / ns.formulas.work.factionGains(playerInfo, ns.enums.FactionWorkType.hacking, 0).reputation >= 0.1) {
-        // TODO: We should be able to borrow logic from work-for-factions.js to have more sleeves work for useful factions / companies
-        // We'll cycle through work types until we find one that is supported. TODO: Auto-determine the most productive faction work to do.
         const faction = playerWorkInfo.factionName;
         const work = await bestFactionWork(ns, sleeve, i, faction);
-        if (ns.formulas.work.factionGains(sleeve, work, 0).reputation / ns.formulas.work.factionGains(getPlayerInfo(ns), work, 0).reputation >= 0.05) {
-          return [
-            `work for faction '${faction}' (${work})`,
-            `ns.sleeve.setToFactionWork(ns.args[0], ns.args[1], ns.args[2])`,
-            [i, faction, work],
-            `helping earn rep with faction ${faction} by doing ${work} work.`
-          ];
+        if (work && ns.formulas.work.factionGains(sleeve, work, 0).reputation / ns.formulas.work.factionGains(playerInfo, work, 0).reputation >= 0.05) {
+            claimedFactionSlots.add(faction);
+            return [
+                `work for faction '${faction}' (${work})`,
+                `ns.sleeve.setToFactionWork(ns.args[0], ns.args[1], ns.args[2])`,
+                [i, faction, work],
+                `helping earn rep with faction ${faction} by doing ${work} work.`
+            ];
         }
     } // Same as above if player is currently working for a megacorp
     if (i == followPlayerSleeve && playerWorkInfo.type == "COMPANY") {
@@ -445,7 +448,19 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
         /*   */ `doing ${action}${contractName ? ` - ${contractName}` : ''} in Bladeburner.`];
     }
 
-    // Finally, farm intelligence as there appears to be nothing better to do. 
+    // Try to work for any joined faction not yet claimed by another sleeve this tick
+    for (const faction of cachedPlayerFactions) {
+        if (claimedFactionSlots.has(faction)) continue;
+        const work = await bestFactionWork(ns, sleeve, i, faction);
+        if (work !== undefined) {
+            claimedFactionSlots.add(faction);
+            return [`work for faction '${faction}' (${work})`,
+                    `ns.sleeve.setToFactionWork(ns.args[0], ns.args[1], ns.args[2])`,
+                    [i, faction, work],
+                    `earning rep with faction ${faction} by doing ${work} work.`];
+        }
+    }
+    // Finally, farm intelligence as there appears to be nothing better to do.
     return await farmIntelligence(ns, sleeve, i, `there appears to be nothing better to do`);
 }
 
