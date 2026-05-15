@@ -2,7 +2,7 @@
 export async function main(ns) {
     ns.disableLog('ALL');
     ns.ui.openTail();
-    ns.ui.resizeTail(720, 460);
+    ns.ui.resizeTail(720, 350);
     ns.ui.moveTail(880, 0);
 
     const React = globalThis.React;
@@ -61,21 +61,10 @@ export async function main(ns) {
 
     const fmtRam  = (gb) => gb >= 1024 ? `${(gb / 1024).toFixed(0)}TB` : `${gb}GB`;
     const fmtMult = (n)  => (n != null && !isNaN(n)) ? `×${n.toFixed(2)}` : '—';
-
-    const progressBar = (current, target, width = 20) => {
-        const pct    = Math.min(1, current / Math.max(1, target));
-        const filled = Math.round(pct * width);
-        return '[' + '█'.repeat(filled) + '░'.repeat(width - filled) + ']';
+    const fmtProj = (cur, boost) => {
+        if (!boost || boost < 1.001) return '';
+        return ` (→×${(cur * boost).toFixed(2)})`;
     };
-
-    // Aug list — CSS ellipsis handles truncation, so show up to 5 items
-    const fmtList = (list, max = 5) => {
-        if (list.length === 0) return '—';
-        const suffix = list.length > max ? ` +${list.length - max}` : '';
-        return list.slice(0, max).join(', ') + suffix;
-    };
-
-    const NF = 'Neuroflux Governor';
 
     const scriptChecks = [
         { label: 'autopilot',   match: 'autopilot.js' },
@@ -103,7 +92,6 @@ export async function main(ns) {
         const cash     = player.money;
         const stocks   = ap?.stocksValue ?? 0;
         const total    = cash + stocks;
-        const hackStr  = player.skills.hacking.toLocaleString('en');
         const karmaStr = Math.round(karma).toLocaleString('en');
         const killsStr = player.numPeopleKilled.toLocaleString('en');
         const m        = player.mults;
@@ -113,13 +101,16 @@ export async function main(ns) {
         const affordCount = fm?.affordable_count_ex_nf       ?? 0;
         const awaitCount  = fm?.awaiting_install_count_ex_nf ?? 0;
         const augTarget   = ap?.augInstallTarget              ?? 6;
-        const progress    = instCount + affordCount + awaitCount;
-        const barStr      = progressBar(progress, augTarget);
-        const barLabel    = ` ${progress}/${augTarget}  (inst:${instCount}  afford:${affordCount}  pend:${awaitCount})`;
 
-        const affordList = (fm?.affordable_augs       ?? []).filter(a => a !== NF);
-        const awaitList  = (fm?.awaiting_install_augs ?? []).filter(a => a !== NF);
-        const costStr    = fm?.total_aug_cost ? `  Cost: ${fmtMoney(fm.total_aug_cost)}` : '';
+        // Aug cost row (from autopilot HUD state — has total_rep_cost too)
+        const augCost    = ap?.augCost  ?? fm?.total_aug_cost ?? 0;
+        const repCost    = ap?.repCost  ?? 0;
+        const totalCost  = augCost + repCost;
+        const nfInstalled = ap?.nfInstalled ?? 0;
+        const nfPending   = ap?.nfPending   ?? 0;
+
+        // Projected multiplier boosts
+        const pb = ap?.projBoost ?? {};
 
         const bestHost = ah?.[0]?.hostname ?? '';
         const bestRate = ah?.[0]?.gainRate ?? 0;
@@ -144,22 +135,41 @@ export async function main(ns) {
                 t('  Total: '), t(fmtMoney(total), BGREEN),
             ),
 
-            // Stats
-            row(
-                t('Hack: '), t(hackStr),
-                t('  │  Karma: '), t(karmaStr),
-                t('  │  Kills: '), t(killsStr),
-            ),
-
             sep(),
 
-            // Multipliers
+            // Stats table: name  value  ×mult (→×proj)  exp×mult
+            // hack — hacking-specific mults on sub-row, karma/kills pinned right
+            e('div', { style: ROW },
+                t('hack '), t(String(player.skills.hacking).padStart(5), GREEN),
+                t('  '), t(fmtMult(m?.hacking), YELLOW), t(fmtProj(m?.hacking, pb.hacking), CYAN),
+                t('  exp'), t(fmtMult(m?.hacking_exp), YELLOW),
+                e('span', { style: FILL }),
+                t(`karma ${karmaStr}  kills ${killsStr}`, GREY),
+            ),
             row(
-                t('MULTS  hack '), t(fmtMult(m?.hacking), YELLOW),
-                t('  money '),     t(fmtMult(m?.hacking_money), YELLOW),
-                t('  speed '),     t(fmtMult(m?.hacking_speed), YELLOW),
-                t('  chance '),    t(fmtMult(m?.hacking_chance), YELLOW),
-                t('  rep '),       t(fmtMult(m?.faction_rep), YELLOW),
+                t('     '),
+                t('money '), t(fmtMult(m?.hacking_money), YELLOW), t(fmtProj(m?.hacking_money, pb.hacking_money), CYAN),
+                t('  speed '), t(fmtMult(m?.hacking_speed), YELLOW), t(fmtProj(m?.hacking_speed, pb.hacking_speed), CYAN),
+                t('  chance '), t(fmtMult(m?.hacking_chance), YELLOW), t(fmtProj(m?.hacking_chance, pb.hacking_chance), CYAN),
+            ),
+            // combat stats 2-per-row
+            row(
+                t('str  '), t(String(player.skills.strength).padStart(5), GREEN),
+                t('  '), t(fmtMult(m?.strength), YELLOW), t('  exp'), t(fmtMult(m?.strength_exp), YELLOW),
+                t('  │  def  '), t(String(player.skills.defense).padStart(5), GREEN),
+                t('  '), t(fmtMult(m?.defense), YELLOW), t('  exp'), t(fmtMult(m?.defense_exp), YELLOW),
+            ),
+            row(
+                t('dex  '), t(String(player.skills.dexterity).padStart(5), GREEN),
+                t('  '), t(fmtMult(m?.dexterity), YELLOW), t('  exp'), t(fmtMult(m?.dexterity_exp), YELLOW),
+                t('  │  agi  '), t(String(player.skills.agility).padStart(5), GREEN),
+                t('  '), t(fmtMult(m?.agility), YELLOW), t('  exp'), t(fmtMult(m?.agility_exp), YELLOW),
+            ),
+            // cha + rep (faction_rep has no exp, no value)
+            row(
+                t('cha  '), t(String(player.skills.charisma).padStart(5), GREEN),
+                t('  '), t(fmtMult(m?.charisma), YELLOW), t('  exp'), t(fmtMult(m?.charisma_exp), YELLOW),
+                t('  │  rep  '), t(fmtMult(m?.faction_rep), YELLOW), t(fmtProj(m?.faction_rep, pb.faction_rep), CYAN),
             ),
 
             sep(),
@@ -172,22 +182,20 @@ export async function main(ns) {
 
             sep(),
 
-            // Aug progress bar
-            row(t(barStr, BOLD), t(barLabel)),
-
-            // Buy list — aug names fill + cost pinned right
-            e('div', { style: ROW },
-                t('Buy:     ', PIN),
-                e('span', { style: { ...FILL, color: affordList.length ? '#0f0' : '#666' } },
-                    fmtList(affordList)),
-                t(costStr, { ...YELLOW, ...PIN }),
+            // Aug counts: inst / afford / pend + NF levels
+            row(
+                t(`Augs  inst:${instCount}  afford:${affordCount}  pend:${awaitCount}`),
+                t(`  ${instCount + affordCount + awaitCount}/${augTarget}`, BOLD),
+                t('  │  '),
+                t(`NF ×${nfInstalled}`, nfInstalled > 0 ? GREEN : GREY),
+                nfPending > 0 ? t(` +${nfPending}`, CYAN) : '',
             ),
 
-            // Install list
-            e('div', { style: ROW },
-                t('Install: ', PIN),
-                e('span', { style: { ...FILL, color: awaitList.length ? '#88f' : '#666' } },
-                    fmtList(awaitList)),
+            // Aug + donation costs
+            row(
+                t('Cost  augs: '), t(fmtMoney(augCost), augCost > 0 ? YELLOW : GREY),
+                t('  +  donation: '), t(fmtMoney(repCost), repCost > 0 ? YELLOW : GREY),
+                t('  =  '), t(fmtMoney(totalCost), totalCost > 0 ? BGREEN : GREY),
             ),
 
             sep(),
