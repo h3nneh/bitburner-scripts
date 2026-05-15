@@ -64,7 +64,8 @@ const jobs = [ // Job stat requirements for a company with a base stat modifier 
         reqHck: [225, 250, 275, 375], // [1, 26, 51, 151] + 224
         reqStr: [0, 0, 0, 0], reqDef: [0, 0, 0, 0], reqDex: [0, 0, 0, 0], reqAgi: [0, 0, 0, 0],
         reqCha: [0e0, 0e0, 275, 300], // [0,  0, 51,  76] + 224
-        repMult: [0.9, 1.1, 1.3, 1.4]
+        repMult: [0.9, 1.1, 1.3, 1.4],
+        hackEff: [0.90, 0.85, 0.80, 0.80], chaEff: [0.10, 0.15, 0.20, 0.20],
     },
     {
         name: "Software",
@@ -72,7 +73,8 @@ const jobs = [ // Job stat requirements for a company with a base stat modifier 
         reqHck: [225, 275, 475, 625, 725, 725, 825, 975],   // [1, 51, 251, 401, 501, 501, 601, 751] + 224
         reqStr: [0, 0, 0, 0, 0, 0, 0, 0], reqDef: [0, 0, 0, 0, 0, 0, 0, 0], reqDex: [0, 0, 0, 0, 0, 0, 0, 0], reqAgi: [0, 0, 0, 0, 0, 0, 0, 0],
         reqCha: [0e0, 0e0, 275, 375, 475, 475, 625, 725],   // [0,  0,  51, 151, 251, 251, 401, 501] + 224
-        repMult: [0.9, 1.1, 1.3, 1.5, 1.6, 1.6, 1.75, 2.0]
+        repMult: [0.9, 1.1, 1.3, 1.5, 1.6, 1.6, 1.75, 2.0],
+        hackEff: [0.85, 0.85, 0.80, 0.75, 0.75, 0.75, 0.70, 0.65], chaEff: [0.15, 0.15, 0.20, 0.25, 0.25, 0.25, 0.30, 0.35],
     },
     {
         name: "Security",
@@ -81,6 +83,35 @@ const jobs = [ // Job stat requirements for a company with a base stat modifier 
         reqStr: [275, 375, 475, 725], reqDef: [275, 375, 475, 725], reqDex: [275, 375, 475, 725], reqAgi: [275, 375, 475, 725],
         reqCha: [225, 275, 325, 375],
         repMult: [1, 1.1, 1.25, 1.4],
+        hackEff: [0.05, 0.10, 0.10, 0.10], strEff: [0.20, 0.20, 0.15, 0.15], defEff: [0.20, 0.20, 0.15, 0.15],
+        dexEff: [0.20, 0.20, 0.15, 0.15], agiEff: [0.20, 0.20, 0.15, 0.15], chaEff: [0.15, 0.10, 0.30, 0.30],
+    },
+    {
+        name: "Business",
+        reqRep: [0e0, 8e3, 40e3, 200e3, 800e3, 32e5],
+        reqHck: [225, 230, 275, 275, 300, 325], // [1, 6, 51, 51, 76, 101] + 224
+        reqStr: [0, 0, 0, 0, 0, 0], reqDef: [0, 0, 0, 0, 0, 0], reqDex: [0, 0, 0, 0, 0, 0], reqAgi: [0, 0, 0, 0, 0, 0],
+        reqCha: [225, 275, 325, 450, 725, 975], // [1, 51, 101, 226, 501, 751] + 224
+        repMult: [0.9, 1.1, 1.3, 1.5, 1.6, 1.75],
+        hackEff: [0.10, 0.15, 0.15, 0.15, 0.10, 0.10], chaEff: [0.90, 0.85, 0.85, 0.85, 0.90, 0.90],
+    },
+    {
+        name: "Security Engineer",
+        reqRep: [35e3],
+        reqHck: [375], // [151] + 224
+        reqStr: [0], reqDef: [0], reqDex: [0], reqAgi: [0],
+        reqCha: [250], // [26] + 224
+        repMult: [1.2],
+        hackEff: [0.85], chaEff: [0.15],
+    },
+    {
+        name: "Network Engineer",
+        reqRep: [35e3, 175e3],
+        reqHck: [375, 475], // [151, 251] + 224
+        reqStr: [0, 0], reqDef: [0, 0], reqDex: [0, 0], reqAgi: [0, 0],
+        reqCha: [250, 300], // [26, 76] + 224
+        repMult: [1.2, 1.3],
+        hackEff: [0.85, 0.80], chaEff: [0.15, 0.20],
     },
 ]
 const securityCompanies = ["ECorp", "MegaCorp", "Bachman & Associates", "Blade Industries", "NWO", "Clarke Incorporated", "OmniTek Incorporated", "Four Sigma", "KuaiGong International"];
@@ -2689,6 +2720,9 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
     const itJob = jobs.find(j => j.name == "IT");
     const softwareJob = jobs.find(j => j.name == "Software");
     const securityJob = jobs.find(j => j.name == "Security");
+    const businessJob = jobs.find(j => j.name == "Business");
+    const secEngJob = jobs.find(j => j.name == "Security Engineer");
+    const netEngJob = jobs.find(j => j.name == "Network Engineer");
     if (itJob.reqHck[0] + statModifier > player.skills.hacking) // We don't qualify to work for this company yet if we can't meet IT qualifications (lowest there are)
         return ns.print(`Cannot yet work for "${companyName}": Need Hack ${itJob.reqHck[0] + statModifier} to get hired (current Hack: ${player.skills.hacking});`);
     ns.print(`Going to work for Company "${companyName}" next...`)
@@ -2709,10 +2743,30 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
             job.reqAgi.filter(a => (a === 0 ? 0 : a + statModifier) <= player.skills.agility).length,
             job.reqCha.filter(c => (c === 0 ? 0 : c + statModifier) <= player.skills.charisma).length) - 1;
         const qualifyingItTier = getTier(itJob), qualifyingSoftwareTier = getTier(softwareJob), qualifyingSecurityTier = getTier(securityJob);
-        const combatAvg = (player.skills.strength + player.skills.defense + player.skills.dexterity + player.skills.agility) / 4;
-        const secBetter = securityCompanies.includes(companyName) && combatAvg > player.skills.hacking;
-        const bestJobTier = secBetter ? qualifyingSecurityTier : Math.max(qualifyingItTier, qualifyingSoftwareTier);
-        const bestRoleName = secBetter ? "Security" : qualifyingItTier > qualifyingSoftwareTier ? "IT" : "Software";
+        const qualifyingBusinessTier = getTier(businessJob), qualifyingSecEngTier = getTier(secEngJob), qualifyingNetEngTier = getTier(netEngJob);
+        const getRepGain = (job, tier) => {
+            if (tier < 0) return -1;
+            return (job.hackEff[tier] * player.skills.hacking +
+                job.chaEff[tier] * player.skills.charisma +
+                (job.strEff ? job.strEff[tier] * player.skills.strength : 0) +
+                (job.defEff ? job.defEff[tier] * player.skills.defense : 0) +
+                (job.dexEff ? job.dexEff[tier] * player.skills.dexterity : 0) +
+                (job.agiEff ? job.agiEff[tier] * player.skills.agility : 0)
+            ) * job.repMult[tier];
+        };
+        const swGain = getRepGain(softwareJob, qualifyingSoftwareTier);
+        const itGain = getRepGain(itJob, qualifyingItTier);
+        const bizGain = getRepGain(businessJob, qualifyingBusinessTier);
+        const secGain = securityCompanies.includes(companyName) ? getRepGain(securityJob, qualifyingSecurityTier) : -1;
+        const secEngGain = getRepGain(secEngJob, qualifyingSecEngTier);
+        const netEngGain = getRepGain(netEngJob, qualifyingNetEngTier);
+        const bestGain = Math.max(swGain, itGain, bizGain, secGain, secEngGain, netEngGain);
+        const bestRoleName = bestGain === secGain ? "Security" : bestGain === bizGain ? "Business" :
+            bestGain === secEngGain ? "Security Engineer" : bestGain === netEngGain ? "Network Engineer" :
+            bestGain === itGain ? "IT" : "Software";
+        const bestJobTier = bestRoleName === "Security" ? qualifyingSecurityTier : bestRoleName === "Business" ? qualifyingBusinessTier :
+            bestRoleName === "Security Engineer" ? qualifyingSecEngTier : bestRoleName === "Network Engineer" ? qualifyingNetEngTier :
+            bestRoleName === "IT" ? qualifyingItTier : qualifyingSoftwareTier;
         if (currentJobTier < bestJobTier || currentRole != bestRoleName) { // We are ready for a promotion, ask for one!
             if (await tryApplyToCompany(ns, companyName, bestRoleName))
                 log(ns, `Successfully applied to "${companyName}" for a '${bestRoleName}' Job or Promotion`, false, 'success');
@@ -2725,8 +2779,13 @@ export async function workForMegacorpFactionInvite(ns, factionName, waitForInvit
         const currentJob = player.jobs[companyName];
         const nextJobTier = currentRole == "IT" ? currentJobTier : currentJobTier + 1;
         const nextJobName = currentRole == "Security" ? "Security" :
+            currentRole == "Business" ? "Business" :
+            currentRole == "Security Engineer" ? "Security Engineer" :
+            currentRole == "Network Engineer" ? "Network Engineer" :
             currentRole == "IT" || nextJobTier >= itJob.reqRep.length ? "Software" : "IT";
-        const nextJob = nextJobName == "Security" ? securityJob : nextJobName == "IT" ? itJob : softwareJob;
+        const nextJob = nextJobName == "Security" ? securityJob : nextJobName == "Business" ? businessJob :
+            nextJobName == "Security Engineer" ? secEngJob : nextJobName == "Network Engineer" ? netEngJob :
+            nextJobName == "IT" ? itJob : softwareJob;
         const requiredRep = nextJob.reqRep[nextJobTier] * (backdoored ? 0.75 : 1); // Rep requirement is decreased when company server is backdoored
         const requiredHack = nextJob.reqHck[nextJobTier] === 0 ? 0 : nextJob.reqHck[nextJobTier] + statModifier; // Stat modifier only applies to non-zero reqs
         const requiredStr = nextJob.reqStr[nextJobTier] === 0 ? 0 : nextJob.reqStr[nextJobTier] + statModifier;
