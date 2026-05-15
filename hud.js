@@ -69,9 +69,12 @@ export async function main(ns) {
         return '[' + '█'.repeat(filled) + '░'.repeat(width - filled) + ']';
     };
 
-    const fmtList = (list, max = 3) =>
-        list.length === 0 ? '—' :
-        list.slice(0, max).join(', ') + (list.length > max ? ` +${list.length - max} more` : '');
+    const fmtList = (list, maxLen = W - 10, max = 3, nameMax = 24) => {
+        if (list.length === 0) return '—';
+        const suffix = list.length > max ? ` +${list.length - max}` : '';
+        const names  = list.slice(0, max).map(a => a.length > nameMax ? a.substring(0, nameMax - 1) + '…' : a);
+        return (names.join(', ') + suffix).substring(0, maxLen);
+    };
 
     const NF = 'Neuroflux Governor';
 
@@ -135,8 +138,8 @@ export async function main(ns) {
         const affordList = (fm?.affordable_augs       ?? []).filter(a => a !== NF);
         const awaitList  = (fm?.awaiting_install_augs ?? []).filter(a => a !== NF);
         const costStr    = fm?.total_aug_cost ? `  Cost: ${fmtMoney(fm.total_aug_cost)}` : '';
-        const affordStr  = fmtList(affordList);
-        const awaitStr   = fmtList(awaitList);
+        const affordStr  = fmtList(affordList, W - 9 - costStr.length);
+        const awaitStr   = fmtList(awaitList,  W - 9);
 
         // ── Section 8: Target + RAM ───────────────────────────────
         const bestHost = ah?.[0]?.hostname ?? '';
@@ -161,6 +164,8 @@ export async function main(ns) {
                 fontSize:   '11px',
                 lineHeight: '1.3',
                 whiteSpace: 'pre',
+                overflow:   'hidden',
+                maxWidth:   '100%',
             },
         },
             e('div', null, TOP),
