@@ -148,7 +148,7 @@ const maxOptionalCombatTrainingEtaMs = 8 * 60 * 60 * 1000;
 
 let shouldFocus; // Whether we should focus on work or let it be backgrounded (based on whether "Neuroreceptor Management Implant" is owned, or "--no-focus" is specified)
 // And a bunch of globals because managing state and encapsulation is hard.
-let hasFocusPenalty, hasSimulacrum, hasRedPillPurchased, fulcrumHackReq, playerInBladeburner, wasGrafting, currentBitnode;
+let hasFocusPenalty, hasSimulacrum, hasRedPillPurchased, fulcrumHackReq, playerInBladeburner, wasGrafting, currentBitnode, notifiedAboutDaedalus;
 let dictSourceFiles, dictFactionFavors, playerGang, mainLoopStart, scope, numJoinedFactions, lastTravel, crimeCount;
 let firstFactions, skipFactions, completedFactions, softCompletedFactions, mostExpensiveAugByFaction, mostExpensiveDesiredAugByFaction, mostExpensiveDesiredAugCostByFaction;
 let scriptPid = "?";
@@ -307,7 +307,7 @@ export async function main(ns) {
 
     // Reset globals whose value can persist between script restarts in weird situations
     lastTravel = crimeCount = currentBitnode = 0;
-    playerInBladeburner = wasGrafting = false;
+    playerInBladeburner = wasGrafting = notifiedAboutDaedalus = false;
     recentHospitalizedLocations = {};
     lastMoneyFallbackStatus = lastNoFactionInfiltrationTargetStatus = "";
     lastNoFactionInfiltrationTargetStatusUpdate = 0;
@@ -1693,6 +1693,7 @@ export async function workForSingleFaction(ns, factionName, forceThroughInvitePr
     if (currentReputation >= factionRepRequired)
         return ns.print(`Faction "${factionName}" required rep of ${Math.round(factionRepRequired).toLocaleString('en')} has already been attained ` +
             `(Current rep: ${Math.round(currentReputation).toLocaleString('en')}). Skipping working for faction...`)
+    if (factionName == "Daedalus") await daedalusSpecialCheck(ns, favorRepRequired, currentReputation);
 
     ns.print(`Faction "${factionName}" Highest Aug Req: ${highestRepAug?.toLocaleString('en')}, Current Favor ` +
         `${startingFavor?.toFixed(2)}, Target Rep: ${Math.round(factionRepRequired).toLocaleString('en')}`);
@@ -1868,11 +1869,23 @@ export async function workForSingleFaction(ns, factionName, forceThroughInvitePr
             else if (currentFavor > startingFavor)
                 startingFavor = dictFactionFavors[factionName] = currentFavor;
         }
+        if (factionName == "Daedalus") await daedalusSpecialCheck(ns, favorRepRequired, currentReputation);
     }
     if (currentReputation >= factionRepRequired)
         ns.print(`Attained ${Math.round(currentReputation).toLocaleString('en')} rep with "${factionName}" ` +
             `(needed ${factionRepRequired.toLocaleString('en')}).`);
     return currentReputation >= factionRepRequired;
+}
+
+/** Checks if we've ground enough Daedalus rep to unlock donations on next reset, and signals faction-manager to reset if so. */
+async function daedalusSpecialCheck(ns, favorRepRequired, currentReputation) {
+    if (favorRepRequired == 0 || currentReputation < favorRepRequired) return;
+    // Close enough to TRP rep — no need to reset just for donations
+    if (currentReputation >= 0.9 * 2.500e6 * (bitNodeMults?.AugmentationRepCost ?? 1)) return;
+    log(ns, `INFO: You have enough reputation with Daedalus (have ${formatNumberShort(currentReputation)}) that you will ` +
+        `unlock donations (needed ${formatNumberShort(favorRepRequired)}) with them on your next reset.`, !notifiedAboutDaedalus, "info");
+    ns.write("/Temp/Daedalus-donation-rep-attained.txt", "True", "w");
+    notifiedAboutDaedalus = true;
 }
 
 function formatInfiltrationRepEstimate(infiltration) {

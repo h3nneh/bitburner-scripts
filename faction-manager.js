@@ -581,11 +581,17 @@ async function manageAutomatedAugmentations(ns, resetInfo, ownedSourceFiles, sf1
         };
     }
 
+    const daedalusDonationRepAttained = joinedFactions.includes("Daedalus") && bitNodeMults.FavorToDonateToFaction !== 0 &&
+        ns.read("/Temp/Daedalus-donation-rep-attained.txt");
     let resetStatus = `Reserving ${formatMoney(totalCost)} to install ${summary.augSummary}`;
     let shouldReset = cashRootReady ||
         options['install-for-augs'].some(a => status.affordable_augs.includes(a)) ||
-        summary.pendingAugCount >= augsNeeded || summary.pendingAugInclNfCount >= augsNeededInclNf;
+        summary.pendingAugCount >= augsNeeded || summary.pendingAugInclNfCount >= augsNeededInclNf ||
+        daedalusDonationRepAttained;
     let installCountdown = Number(options['install-countdown']) || 0;
+    if (daedalusDonationRepAttained) {
+        resetStatus = `Daedalus donation rep attained — resetting to lock in favor for donations next reset.\n${resetStatus}`;
+    }
     if (cashRootReady) {
         resetStatus = `"${augCashRoot}" is ready. Installing early only after ascend.js spends practical available cash on current purchases/upgrades.\n${resetStatus}`;
         installCountdown = 0;
