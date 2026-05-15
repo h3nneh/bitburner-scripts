@@ -2,7 +2,7 @@
 export async function main(ns) {
     ns.disableLog('ALL');
     ns.ui.openTail();
-    ns.ui.resizeTail(720, 350);
+    ns.ui.resizeTail(720, 390);
     ns.ui.moveTail(880, 0);
 
     const React = globalThis.React;
@@ -12,7 +12,6 @@ export async function main(ns) {
     const GREEN  = { color: '#0f0' };
     const YELLOW = { color: '#ff0' };
     const CYAN   = { color: '#0ff' };
-    const BLUE   = { color: '#88f' };
     const GREY   = { color: '#666' };
     const BGREEN = { color: '#0f0', fontWeight: 'bold' };
     const BCYAN  = { color: '#0ff', fontWeight: 'bold' };
@@ -27,11 +26,9 @@ export async function main(ns) {
         boxSizing:  'border-box',
         whiteSpace: 'pre',
     };
-    const ROW = { display: 'flex', padding: '0 4px', alignItems: 'baseline' };
-    const SEP = { borderTop: '1px solid #0f0' };
-    // Span that fills remaining space and truncates with ellipsis
+    const ROW  = { display: 'flex', padding: '0 4px', alignItems: 'baseline' };
+    const SEP  = { borderTop: '1px solid #0f0' };
     const FILL = { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' };
-    // Span that never shrinks (pinned content like labels / cost)
     const PIN  = { flexShrink: 0 };
 
     // ── Helpers ──────────────────────────────────────────────────
@@ -65,6 +62,13 @@ export async function main(ns) {
         if (!boost || boost < 1.001) return '';
         return ` (→×${(cur * boost).toFixed(2)})`;
     };
+    const fmtList = (list, max = 5) => {
+        if (!list || list.length === 0) return '—';
+        const suffix = list.length > max ? ` +${list.length - max}` : '';
+        return list.slice(0, max).join(', ') + suffix;
+    };
+
+    const NF = 'Neuroflux Governor';
 
     const scriptChecks = [
         { label: 'autopilot',   match: 'autopilot.js' },
@@ -80,12 +84,12 @@ export async function main(ns) {
         // ── State files ───────────────────────────────────────────
         const ap = (() => { try { return JSON.parse(ns.read('/Temp/autopilot-hud.txt') || 'null'); } catch { return null; } })();
         const fm = (() => { try { return JSON.parse(ns.read('/Temp/affordable-augs.txt') || 'null'); } catch { return null; } })();
-        const ah = (() => { try { return JSON.parse(ns.read('/Temp/analyze-hack.txt')   || 'null'); } catch { return null; } })();
 
         // ── Live data ─────────────────────────────────────────────
         const player = ns.getPlayer();
         const procs  = ns.ps('home').map(p => p.filename);
         const karma  = ns.heart.break();
+        const work   = (() => { try { return ns.singularity.getCurrentWork(); } catch { return null; } })();
 
         // ── Derived values ────────────────────────────────────────
         const bnStr    = `BN${ap?.bn ?? '?'}`;
@@ -101,22 +105,34 @@ export async function main(ns) {
         const affordCount = fm?.affordable_count_ex_nf       ?? 0;
         const awaitCount  = fm?.awaiting_install_count_ex_nf ?? 0;
         const augTarget   = ap?.augInstallTarget              ?? 6;
-
-        // Aug cost row (from autopilot HUD state — has total_rep_cost too)
-        const augCost    = ap?.augCost  ?? fm?.total_aug_cost ?? 0;
-        const repCost    = ap?.repCost  ?? 0;
-        const totalCost  = augCost + repCost;
+        const augCost     = ap?.augCost  ?? fm?.total_aug_cost ?? 0;
+        const repCost     = ap?.repCost  ?? 0;
+        const totalCost   = augCost + repCost;
         const nfInstalled = ap?.nfInstalled ?? 0;
         const nfPending   = ap?.nfPending   ?? 0;
+        const affordList  = (fm?.affordable_augs ?? []).filter(a => a !== NF);
+        const pb          = fm?.projBoost ?? ap?.projBoost ?? {};
 
-        // Projected multiplier boosts
-        const pb = ap?.projBoost ?? {};
-
-        const bestHost = ah?.[0]?.hostname ?? '';
-        const bestRate = ah?.[0]?.gainRate ?? 0;
         const homeMax  = ap?.homeRam     ?? ns.getServerMaxRam('home');
         const homeUsed = ap?.homeRamUsed ?? 0;
         const homePct  = homeMax > 0 ? (100 * homeUsed / homeMax).toFixed(1) : '?';
+
+        // Current work description
+        let workStr = '—';
+        if (work) {
+            if (work.type === 'FACTION') {
+                const wt = work.factionWorkType ? `  [${work.factionWorkType.toLowerCase()}]` : '';
+                workStr = `${work.factionName}${wt}`;
+            } else if (work.type === 'COMPANY') {
+                workStr = `${work.companyName}`;
+            } else if (work.type === 'CLASS') {
+                workStr = `Studying`;
+            } else if (work.type === 'CRIME') {
+                workStr = `Crime`;
+            } else {
+                workStr = work.type ?? '?';
+            }
+        }
 
         // ── Render ────────────────────────────────────────────────
         ns.clearLog();
@@ -137,8 +153,7 @@ export async function main(ns) {
 
             sep(),
 
-            // Stats table: name  value  ×mult (→×proj)  exp×mult
-            // hack — hacking-specific mults on sub-row, karma/kills pinned right
+            // ── Hacking stats ────────────────────────────────────
             e('div', { style: ROW },
                 t('hack '), t(String(player.skills.hacking).padStart(5), GREEN),
                 t('  '), t(fmtMult(m?.hacking), YELLOW), t(fmtProj(m?.hacking, pb.hacking), CYAN),
@@ -152,7 +167,10 @@ export async function main(ns) {
                 t('  speed '), t(fmtMult(m?.hacking_speed), YELLOW), t(fmtProj(m?.hacking_speed, pb.hacking_speed), CYAN),
                 t('  chance '), t(fmtMult(m?.hacking_chance), YELLOW), t(fmtProj(m?.hacking_chance, pb.hacking_chance), CYAN),
             ),
-            // combat stats 2-per-row
+
+            sep(),
+
+            // ── Combat / Cha / Rep stats ─────────────────────────
             row(
                 t('str  '), t(String(player.skills.strength).padStart(5), GREEN),
                 t('  '), t(fmtMult(m?.strength), YELLOW), t('  exp'), t(fmtMult(m?.strength_exp), YELLOW),
@@ -165,7 +183,6 @@ export async function main(ns) {
                 t('  │  agi  '), t(String(player.skills.agility).padStart(5), GREEN),
                 t('  '), t(fmtMult(m?.agility), YELLOW), t('  exp'), t(fmtMult(m?.agility_exp), YELLOW),
             ),
-            // cha + rep (faction_rep has no exp, no value)
             row(
                 t('cha  '), t(String(player.skills.charisma).padStart(5), GREEN),
                 t('  '), t(fmtMult(m?.charisma), YELLOW), t('  exp'), t(fmtMult(m?.charisma_exp), YELLOW),
@@ -182,30 +199,31 @@ export async function main(ns) {
 
             sep(),
 
-            // Aug counts: inst / afford / pend + NF levels
-            row(
+            // ── Augmentations ────────────────────────────────────
+            // counts + NF + total cost pinned right
+            e('div', { style: ROW },
                 t(`Augs  inst:${instCount}  afford:${affordCount}  pend:${awaitCount}`),
                 t(`  ${instCount + affordCount + awaitCount}/${augTarget}`, BOLD),
                 t('  │  '),
                 t(`NF ×${nfInstalled}`, nfInstalled > 0 ? GREEN : GREY),
                 nfPending > 0 ? t(` +${nfPending}`, CYAN) : '',
+                e('span', { style: FILL }),
+                totalCost > 0 ? t(fmtMoney(totalCost), { ...YELLOW, ...PIN }) : '',
             ),
-
-            // Aug + donation costs
-            row(
-                t('Cost  augs: '), t(fmtMoney(augCost), augCost > 0 ? YELLOW : GREY),
-                t('  +  donation: '), t(fmtMoney(repCost), repCost > 0 ? YELLOW : GREY),
-                t('  =  '), t(fmtMoney(totalCost), totalCost > 0 ? BGREEN : GREY),
+            // affordable aug names (with CSS ellipsis) + donation cost if any
+            e('div', { style: ROW },
+                t('buy:  ', PIN),
+                e('span', { style: { ...FILL, color: affordList.length ? '#0f0' : '#666' } },
+                    fmtList(affordList)),
+                repCost > 0 ? t(`  +don ${fmtMoney(repCost)}`, { ...GREY, ...PIN }) : '',
             ),
 
             sep(),
 
-            // Target + RAM (RAM pinned right)
+            // ── Work + Home RAM ──────────────────────────────────
             e('div', { style: ROW },
-                t('Target: ', PIN),
-                t(bestHost || '—', { ...YELLOW, ...PIN }),
-                t(bestHost ? `  (${fmtMoney(bestRate)}/s)` : ''),
-                e('span', { style: FILL }),  // spacer
+                t('Work:  ', PIN),
+                e('span', { style: { ...FILL, color: work ? '#ff0' : '#666' } }, workStr),
                 t(`Home: ${fmtRam(homeMax)} ${homePct}%`, PIN),
             ),
 
