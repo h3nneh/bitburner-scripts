@@ -1007,7 +1007,8 @@ export async function main(ns) {
         const pursueNetburnersLateGame = player.money >= lateGameNetburnersMoneyThreshold;
         const pursueCompanyFactionsLateGame = player.money >= lateGameCompanyWorkMoneyThreshold;
         const facmanOutput = getFactionManagerOutput(ns);
-        const shouldForceSector12 = !installedAugmentations.includes(augCashRoot) &&
+        const shouldForceSector12 = !ranCasino && !options['disable-casino'] &&
+            !installedAugmentations.includes(augCashRoot) &&
             !facmanOutput?.affordable_augs?.includes(augCashRoot) &&
             !facmanOutput?.awaiting_install_augs?.includes(augCashRoot);
         const moneyFocus = isMoneyFocusActive(runningScripts);
