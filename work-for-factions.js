@@ -555,6 +555,17 @@ async function mainLoop(ns) {
     // Strategy 2: Grind XP with all priority factions that are joined or can be joined, until every single one has desired REP
     if (await workForFirstActionableFaction(ns, factionWorkOrder, faction => workForSingleFaction(ns, faction)))
         return;
+    // Strategy 2b: Fallback when deferred invites block progress — work for joined factions that were skipped due to desired-stats
+    // filter (softCompleted), grinding toward their best available aug regardless of stat filter. Prevents idle when e.g.
+    // --crime-focus skips hacking factions but Daedalus is money-gated and there's nothing else to do.
+    if (loopHadDeferredInvite) {
+        const joinedSoftCompleted = softCompletedFactions.filter(f => player.factions.includes(f) && mostExpensiveAugByFaction[f] > 0);
+        if (joinedSoftCompleted.length > 0) {
+            ns.print(`INFO: Deferred invites blocking main path. Falling back to grinding rep for ${joinedSoftCompleted.length} joined faction(s) with non-desired augs: ${joinedSoftCompleted.join(", ")}`);
+            if (await workForFirstActionableFaction(ns, joinedSoftCompleted, faction => workForSingleFaction(ns, faction, true, true)))
+                return;
+        }
+    }
     if (exitAfterDeferredInviteOnlyPass(ns)) return "deferred-idle";
     if (scope <= 2 || breakToMainLoop()) return;
 
