@@ -1104,11 +1104,6 @@ function filterMissingPrereqs(ns, subset) {
     return subset;
 }
 
-function getConcreteTargetAugsNotInPurchaseOrder() {
-    const plannedNonNf = new Set(purchaseableAugs.filter(aug => aug.name != strNF).map(aug => aug.name));
-    return Object.values(augmentationData)
-        .filter(aug => aug.name != strNF && !aug.owned && aug.desired && !plannedNonNf.has(aug.name));
-}
 
 /** Helper to generate outputs for different subsets of the augmentations, each in optimal sort order
  * @param {NS} ns
@@ -1204,15 +1199,7 @@ async function managePurchaseableAugs(ns, outputRows, accessibleAugs) {
 
     // NEXT STEP: Add as many NeuroFlux levels to our purchase as we can (unless disabled)
     if (options['neuroflux-disabled']) return;
-    const remainingConcreteTargets = getConcreteTargetAugsNotInPurchaseOrder();
-    if (remainingConcreteTargets.length > 0 && purchaseableAugs.length > 0) {
-        outputRows.push(`INFO: Not buying ${strNF} yet. ${remainingConcreteTargets.length} concrete target augmentation(s) remain, ` +
-            `so ${strNF} is reserved for leftover cash after goals are complete: ` +
-            remainingConcreteTargets.slice(0, 8).map(aug => `"${aug.name}"`).join(", ") +
-            (remainingConcreteTargets.length > 8 ? `, ...` : ''));
-        if (nextUpAug) outputRows.push(nextUpAug);
-        return;
-    }
+
     const augNf = augmentationData[strNF];
     // We can reverse-engineer our current NeuroFlux level by looking at its current price, and knowing its cost scales at x1.14 per level.
     nfLevelPurchased = Math.round(Math.log(augNf.price / (augCountMult ** numAugsAwaitingInstall * 750000 * bitNodeMults.AugmentationMoneyCost)) / Math.log(1.14));
