@@ -2,7 +2,7 @@
 export async function main(ns) {
     ns.disableLog('ALL');
     ns.ui.openTail();
-    ns.ui.resizeTail(720, 380);
+    ns.ui.resizeTail(720, 460);
     ns.ui.moveTail(880, 0);
 
     const React = globalThis.React;
@@ -10,8 +10,8 @@ export async function main(ns) {
 
     const BASE = {
         fontFamily: 'Courier New, monospace',
-        fontSize:   '13px',
-        lineHeight: '1.35',
+        fontSize:   '15px',
+        lineHeight: '1.4',
         border:     '1px solid',
         width:      '100%',
         boxSizing:  'border-box',
@@ -52,14 +52,8 @@ export async function main(ns) {
         return list.slice(0, max).join(', ') + suffix;
     };
 
-    // Fixed-width mult formatters for monospace column alignment
-    // fmtM → 5 chars:  ×2.62  or      —
-    // fmtP → 7 chars:  →×3.91   or 7 spaces
+    // ×5.60 — always 5 chars
     const fmtM = (n) => (n != null && !isNaN(n)) ? `×${n.toFixed(2)}` : '    —';
-    const fmtP = (cur, boost) => {
-        if (!boost || boost < 1.001) return '       ';
-        return `→×${(cur * boost).toFixed(2)} `;
-    };
 
     const NF = 'Neuroflux Governor';
 
@@ -100,17 +94,6 @@ export async function main(ns) {
         const WARN    = c(th.warning);
         const BINFO   = c(th.info, true);
 
-        // Stat row layout:  label(5)  value(6)  ··mult(5)  ··proj(7)  ·exp(3)  mult(5)
-        // Monospace padding ensures column alignment across all stat rows
-        const statRow = (label, val, mk, ek, pk, col) => row(
-            t(label.padEnd(5),                                          GREY),
-            t((val != null ? String(val) : '').padStart(6),             col),
-            t('  ' + fmtM(m?.[mk]),                                     col),
-            t('  ' + fmtP(m?.[mk], pk ? pb[pk] : 0),                   INFO),
-            t(ek ? ' exp' : '    ',                                      GREY),
-            t(ek ? fmtM(m?.[ek]) : '     ',                             col),
-        );
-
         // ── Derived ───────────────────────────────────────────────
         const bnStr    = `BN${ap?.bn ?? '?'}`;
         const cash     = player.money;
@@ -119,19 +102,19 @@ export async function main(ns) {
         const karmaStr = Math.round(karma).toLocaleString('en');
         const killsStr = player.numPeopleKilled.toLocaleString('en');
         const m        = player.mults;
+        const pb       = fm?.projBoost ?? ap?.projBoost ?? {};
 
         const statusStr   = ap?.status ?? '(no autopilot data)';
-        const instCount   = fm?.installed_count_ex_nf       ?? 0;
-        const affordCount = fm?.affordable_count_ex_nf       ?? 0;
-        const awaitCount  = fm?.awaiting_install_count_ex_nf ?? 0;
-        const augTarget   = ap?.augInstallTarget              ?? 6;
+        const instCount   = fm?.installed_count_ex_nf        ?? 0;
+        const affordCount = fm?.affordable_count_ex_nf        ?? 0;
+        const awaitCount  = fm?.awaiting_install_count_ex_nf  ?? 0;
+        const augTarget   = ap?.augInstallTarget               ?? 6;
         const augCost     = ap?.augCost  ?? fm?.total_aug_cost ?? 0;
         const repCost     = ap?.repCost  ?? 0;
         const totalCost   = augCost + repCost;
         const nfInstalled = ap?.nfInstalled ?? 0;
         const nfPending   = ap?.nfPending   ?? 0;
         const affordList  = (fm?.affordable_augs ?? []).filter(a => a !== NF);
-        const pb          = fm?.projBoost ?? ap?.projBoost ?? {};
         const countdownTs = fm?.install_status?.installCountdown ?? 0;
         const countdownMs = countdownTs > Date.now() ? countdownTs - Date.now() : 0;
 
@@ -150,13 +133,31 @@ export async function main(ns) {
             } else if (work.type === 'COMPANY') {
                 workStr = work.companyName;
             } else if (work.type === 'CLASS') {
-                workStr = `Studying`;
+                workStr = 'Studying';
             } else if (work.type === 'CRIME') {
-                workStr = `Crime`;
+                workStr = 'Crime';
             } else {
                 workStr = work.type ?? '?';
             }
         }
+
+        // Inline projected mult — only rendered when pending augs will actually boost this stat
+        const proj = (mk, pk) => {
+            const boost = pk ? pb[pk] : null;
+            if (!boost || boost < 1.001) return null;
+            return t(` →×${((m?.[mk] ?? 1) * boost).toFixed(2)}`, INFO);
+        };
+
+        // label(4) value(6)  ×mult(5)  [→×proj]  [  exp ×mult(5)]
+        const statRow = (label, val, mk, ek, pk, col) => row(
+            t(label.padEnd(4),                                    GREY),
+            t((val != null ? String(val) : '').padStart(6),       col),
+            t('  '),
+            t(fmtM(m?.[mk]),                                      col),
+            proj(mk, pk),
+            ek ? t('  exp ',                                      GREY) : null,
+            ek ? t(fmtM(m?.[ek]),                                 col)  : null,
+        );
 
         // ── Render ────────────────────────────────────────────────
         ns.clearLog();
@@ -178,20 +179,21 @@ export async function main(ns) {
 
             // ── Hacking ──────────────────────────────────────────
             e('div', { style: ROW },
-                t('hack '.padEnd(5),                                    GREY),
-                t(String(player.skills.hacking).padStart(6),            HACK),
-                t('  ' + fmtM(m?.hacking),                              HACK),
-                t('  ' + fmtP(m?.hacking, pb.hacking),                  INFO),
-                t(' exp',                                                GREY),
-                t(fmtM(m?.hacking_exp),                                  HACK),
+                t('hack',                                          GREY),
+                t(String(player.skills.hacking).padStart(6),      HACK),
+                t('  '),
+                t(fmtM(m?.hacking),                               HACK),
+                proj('hacking', 'hacking'),
+                t('  exp ',                                        GREY),
+                t(fmtM(m?.hacking_exp),                           HACK),
                 e('span', { style: FILL }),
-                t(`karma ${karmaStr}  kills ${killsStr}`,                GREY),
+                t(`karma ${karmaStr}  kills ${killsStr}`,          GREY),
             ),
             row(
-                t(' '.repeat(13)),
-                t('money '), t(fmtM(m?.hacking_money), HACK), t(' ' + fmtP(m?.hacking_money, pb.hacking_money), INFO),
-                t('  speed '),  t(fmtM(m?.hacking_speed),  HACK), t(' ' + fmtP(m?.hacking_speed,  pb.hacking_speed),  INFO),
-                t('  chance '), t(fmtM(m?.hacking_chance), HACK), t(' ' + fmtP(m?.hacking_chance, pb.hacking_chance), INFO),
+                t('    '),
+                t('money ',   GREY), t(fmtM(m?.hacking_money),  HACK), proj('hacking_money',  'hacking_money'),
+                t('  speed ',  GREY), t(fmtM(m?.hacking_speed),  HACK), proj('hacking_speed',  'hacking_speed'),
+                t('  chance ', GREY), t(fmtM(m?.hacking_chance), HACK), proj('hacking_chance', 'hacking_chance'),
             ),
 
             sep(),
@@ -205,13 +207,8 @@ export async function main(ns) {
             sep(),
 
             // ── Charisma + Rep ───────────────────────────────────
-            statRow('cha', player.skills.charisma, 'charisma', 'charisma_exp', null, CHA),
-            row(
-                t('rep  '.padEnd(5),  GREY),
-                t('      '),
-                t('  ' + fmtM(m?.faction_rep),                 c(th.rep)),
-                t('  ' + fmtP(m?.faction_rep, pb.faction_rep), INFO),
-            ),
+            statRow('cha', player.skills.charisma, 'charisma',   'charisma_exp', null,          CHA),
+            statRow('rep', null,                   'faction_rep', null,           'faction_rep', c(th.rep)),
 
             sep(),
 
@@ -229,16 +226,16 @@ export async function main(ns) {
                 t(`  ${instCount + affordCount + awaitCount}/${augTarget}`, { ...BOLD, color: th.primary }),
                 t('  │  ', GREY),
                 t(`NF ×${nfInstalled}`, nfInstalled > 0 ? SUCCESS : GREY),
-                nfPending > 0 ? t(` +${nfPending}`, INFO) : '',
+                nfPending > 0 ? t(` +${nfPending}`, INFO) : null,
                 e('span', { style: FILL }),
-                totalCost > 0 ? t(fmtMoney(totalCost), { ...WARN, ...PIN }) : '',
-                countdownMs > 0 ? t(`  in ${fmtDur(countdownMs)}`, { ...INFO, ...PIN }) : '',
+                totalCost > 0 ? t(fmtMoney(totalCost), { ...WARN, ...PIN }) : null,
+                countdownMs > 0 ? t(`  in ${fmtDur(countdownMs)}`, { ...INFO, ...PIN }) : null,
             ),
             e('div', { style: ROW },
                 t('buy:  ', GREY),
                 e('span', { style: { ...FILL, color: affordList.length ? th.success : th.secondary } },
                     fmtList(affordList)),
-                repCost > 0 ? t(`  +don ${fmtMoney(repCost)}`, { ...GREY, ...PIN }) : '',
+                repCost > 0 ? t(`  +don ${fmtMoney(repCost)}`, { ...GREY, ...PIN }) : null,
             ),
 
             sep(),
@@ -247,7 +244,7 @@ export async function main(ns) {
             e('div', { style: ROW },
                 t('Work:  ', GREY),
                 e('span', { style: { ...FILL, color: work ? th.warning : th.secondary } }, workStr),
-                workElapsed ? t(workElapsed, { ...GREY, ...PIN }) : '',
+                workElapsed ? t(workElapsed, { ...GREY, ...PIN }) : null,
                 t(`  Home: ${fmtRam(homeMax)} ${homePct}%`, { color: th.primary, ...PIN }),
             ),
 
