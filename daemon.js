@@ -493,7 +493,7 @@ export async function main(ns) {
             else
                 args.push("--disable-cross-city-background-training");
             if (options['no-tail-windows']) args.push("--no-tail-windows");
-            if (!options['cashroot-priority'] && !options['disable-rush-gangs'] && !playerInGang) {
+            if (!options['cashroot-priority'] && !options['disable-rush-gangs'] && !playerInGang && 2 in dictSourceFiles) {
                 args.push("--crime-focus", "--training-stat-per-multi-threshold", 200, "--prioritize-invites");
             }
             return appendWorkTailArgs(args);
