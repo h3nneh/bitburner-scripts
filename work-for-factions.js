@@ -446,7 +446,7 @@ async function mainLoop(ns) {
     if (!breakToMainLoop() && !lastLoopHadDeferredInvite) scope++; // Increase scope only after a clean no-work pass.
     lastLoopHadDeferredInvite = false;
     loopHadDeferredInvite = false;
-    scope = Math.min(scope, 9);
+    scope = Math.min(scope, 10);
     mainLoopStart = Date.now();
     // If changing our loop scope, log a message
     const loopMessage = `INFO: Currently work scope is anything <= priority level: ${scope}`;
@@ -571,28 +571,34 @@ async function mainLoop(ns) {
     if (exitAfterDeferredInviteOnlyPass(ns)) return "deferred-idle";
     if (scope <= 5 || breakToMainLoop()) return;
 
-    // Strategy 6: Revisit all factions until each has enough rep for its most expensive useful aug.
-    // For this, we reverse the order of non-priority factions (ones with augs costing the most-rep to least) since these take the most time to grind.
+    // Strategy 6: Grind rep for all factions until donations are unlocked - so next reset we don't need to grind rep, just donate.
+    // Reversed order: factions with highest aug rep reqs take the most time, do them last (most likely to be cut short).
     let allFactionsWorkOrderReversed = factionWorkOrder.filter(f => allIncompleteFactions.includes(f))
         .concat(allIncompleteFactions.reverse().filter(f => !factionWorkOrder.includes(f)));
-    if (await workForFirstActionableFaction(ns, allFactionsWorkOrderReversed, faction => workForSingleFaction(ns, faction, false, true))) // ForceBestAug = true
+    if (await workForFirstActionableFaction(ns, allFactionsWorkOrderReversed, faction => workForSingleFaction(ns, faction, false, false, false, true))) // forceUnlockDonations = true
         return;
     if (exitAfterDeferredInviteOnlyPass(ns)) return "deferred-idle";
     if (scope <= 6 || breakToMainLoop()) return;
 
-    // Strategy 7: Next, revisit all factions and grind XP until we can afford the most expensive aug on this install.
-    if (await workForFirstActionableFaction(ns, allFactionsWorkOrder, faction => workForSingleFaction(ns, faction, true, true))) // ForceBestAug = true
+    // Strategy 7: Revisit all factions until each has enough rep for its most expensive useful aug.
+    if (await workForFirstActionableFaction(ns, allFactionsWorkOrderReversed, faction => workForSingleFaction(ns, faction, false, true))) // ForceBestAug = true
         return;
     if (exitAfterDeferredInviteOnlyPass(ns)) return "deferred-idle";
     if (scope <= 7 || breakToMainLoop()) return;
 
-    // Strategy 8: Final rep pass with forceRep enabled so already-joined factions are not skipped by any earlier heuristic.
-    if (await workForFirstActionableFaction(ns, allFactionsWorkOrder, faction => workForSingleFaction(ns, faction, false, true, true))) // ForceRep = true
+    // Strategy 8: Next, revisit all factions and grind XP until we can afford the most expensive aug on this install.
+    if (await workForFirstActionableFaction(ns, allFactionsWorkOrder, faction => workForSingleFaction(ns, faction, true, true))) // ForceBestAug = true
         return;
     if (exitAfterDeferredInviteOnlyPass(ns)) return "deferred-idle";
     if (scope <= 8 || breakToMainLoop()) return;
 
-    // Strategy 9: Busy ourselves for a while longer, then loop to see if there anything more we can do for the above factions
+    // Strategy 9: Final rep pass with forceRep enabled so already-joined factions are not skipped by any earlier heuristic.
+    if (await workForFirstActionableFaction(ns, allFactionsWorkOrder, faction => workForSingleFaction(ns, faction, false, true, true))) // ForceRep = true
+        return;
+    if (exitAfterDeferredInviteOnlyPass(ns)) return "deferred-idle";
+    if (scope <= 9 || breakToMainLoop()) return;
+
+    // Strategy 10: Busy ourselves for a while longer, then loop to see if there anything more we can do for the above factions
     let factionsWeCanWorkFor = joinedFactions.filter(f => !options.skip.includes(f) && !cannotWorkForFactions.includes(f) &&
         !passiveInfiltrationFactions.includes(f) && f != playerGang);
     let foundWork = false;
@@ -620,7 +626,7 @@ async function mainLoop(ns) {
                 `background hacking/money/invite progress before rechecking.`);
         await ns.sleep(30000);
     }
-    if (scope <= 9) scope--; // Cap the 'scope' value from increasing perpetually when we're on our last strategy
+    if (scope <= 10) scope--; // Cap the 'scope' value from increasing perpetually when we're on our last strategy
 }
 
 async function workForFirstActionableFaction(ns, factionOrder, workFn) {
@@ -1632,13 +1638,19 @@ let lastPassiveFactionStatusUpdate = 0;
  *                                          and b) keep going until we can buy all augmentations.
  * @param {boolean|number} forceRep Set to true to force working for reputation despite earlier completion heuristics.
  *                               Hack: If set to a number, we will work until that reputation amount regardless of augmentation reputation requirements.
+ * @param {boolean} forceUnlockDonations Grind rep until donations are unlocked for next reset (favor >= getFavorToDonate()).
  * */
-export async function workForSingleFaction(ns, factionName, forceThroughInvitePriority = false, forceBestAug = false, forceRep = false) {
+export async function workForSingleFaction(ns, factionName, forceThroughInvitePriority = false, forceBestAug = false, forceRep = false, forceUnlockDonations = false) {
     if (passiveInfiltrationFactions.includes(factionName))
         return await handlePassiveInfiltrationFaction(ns, factionName);
+    const repToFavor = (favor) => Math.ceil(25500 * 1.02 ** (favor - 1) - 25000);
     let highestRepAug = forceBestAug ? mostExpensiveAugByFaction[factionName] : mostExpensiveDesiredAugByFaction[factionName];
     let startingFavor = dictFactionFavors[factionName] || 0; // How much favour do we already have with this faction?
+    const favorToDonate = Math.floor(150 * (bitNodeMults?.FavorToDonateToFaction ?? 1));
+    const favorRepRequired = Math.max(0, repToFavor(favorToDonate) - repToFavor(Math.max(1, startingFavor)));
     let factionRepRequired = highestRepAug;
+    if (forceUnlockDonations) // Grind until donations are unlocked for next reset
+        factionRepRequired = Math.max(factionRepRequired, favorRepRequired);
     if (forceBestAug)// If forced, ensure we earn enough rep to buy the highest rep augmentation
         factionRepRequired = Math.max(factionRepRequired, highestRepAug);
     if (forceRep !== true && forceRep > 0) // If forceRep is a number (not just a flag 'true'), ensure we earn the specified rep amount
@@ -1646,6 +1658,14 @@ export async function workForSingleFaction(ns, factionName, forceThroughInvitePr
     // Check for any reasons to skip working for this faction
     if (!forceRep && highestRepAug == -1 && !firstFactions.includes(factionName) && !options['get-invited-to-every-faction'])
         return ns.print(`All "${factionName}" augmentations are owned. Skipping unlocking faction...`);
+    // If donations are already unlocked, no need to grind rep for that purpose
+    if (forceUnlockDonations && !forceBestAug && !forceRep && startingFavor >= favorToDonate)
+        return ns.print(`Donations already unlocked for "${factionName}" (favor ${startingFavor?.toFixed(2)} >= ${favorToDonate}). Skipping donation unlock grind...`);
+    // Hack: Don't bother unlocking donations for factions whose most expensive aug is <20% of the donation rep required (not worth the grind)
+    if (forceUnlockDonations && !forceBestAug && !forceRep && highestRepAug > 0 && highestRepAug < 0.2 * favorRepRequired) {
+        ns.print(`"${factionName}" last aug (${highestRepAug?.toLocaleString('en')} rep) is trivial vs donation threshold (${favorRepRequired?.toLocaleString('en')} rep). Skipping donation unlock.`);
+        factionRepRequired = highestRepAug;
+    }
     // Ensure we get an invite to location-based factions we might want / need
     const inviteStatus = await earnFactionInvite(ns, factionName);
     if (inviteStatus === "deferred")
