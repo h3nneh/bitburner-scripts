@@ -13,6 +13,7 @@ const factionManagerInstallRefreshInterval = 60 * 1000;
 const preCasinoInfiltrationFile = "/Temp/autopilot-pre-casino-infiltration.txt";
 const preCasinoInfiltrationResultFile = "/Temp/autopilot-pre-casino-infiltration-result.txt";
 const earlyBootstrapPurchasesFile = `/Temp/early-bootstrap-purchases-${autopilotVersion}.txt`;
+const hudStateFile = "/Temp/autopilot-hud.txt";
 const earlyHomeRamTarget = 1024;
 const bn3EarlyHomeRamTarget = 4096;
 
@@ -391,6 +392,7 @@ export async function main(ns) {
         await maybeInstallAugmentations(ns, player);
         if (autopilotHandoffLaunched)
             return false;
+        writeHudState(ns);
         return shouldWeKeepRunning(ns); // Return false to shut down autopilot.js if we installed augs, or don't have enough home RAM
     }
 
@@ -1584,6 +1586,26 @@ export async function main(ns) {
      * @param {NS} ns */
     function persist_log(ns, text) {
         ns.write(persistentLog, `${(new Date()).toISOString().substring(0, 19)} ${text}\n`, "a")
+    }
+
+    /** Write current autopilot state for hud.js to display. Zero RAM overhead (ramOverride already declared). */
+    function writeHudState(ns) {
+        ns.write(hudStateFile, JSON.stringify({
+            ts: Date.now(),
+            bn: resetInfo?.currentNode ?? 0,
+            timeInBn: resetInfo ? getTimeInBitnode() : 0,
+            timeInAug: resetInfo ? getTimeInAug() : 0,
+            status: lastStatusLog,
+            stocksValue: cachedStocksValue,
+            homeRam: homeRam,
+            homeRamUsed: ns.getServerUsedRam('home'),
+            ranCasino,
+            playerInGang,
+            playerInBladeburner,
+            augInstallTarget: options?.['install-at-aug-count'] ?? 0,
+            augPlusNfTarget: options?.['install-at-aug-plus-nf-count'] ?? 0,
+            version: autopilotVersion,
+        }), "w");
     }
 
     let logged_once = new Set();
