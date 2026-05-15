@@ -1,9 +1,9 @@
 /** @param {NS} ns */
 export async function main(ns) {
     ns.disableLog('ALL');
-    ns.tail();
-    ns.resizeTail(590, 460);
-    ns.moveTail(1010, 0);
+    ns.ui.openTail();
+    ns.ui.resizeTail(590, 460);
+    ns.ui.moveTail(1010, 0);
 
     const W = 68; // inner width between │ chars
 
