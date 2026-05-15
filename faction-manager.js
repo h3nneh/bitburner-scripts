@@ -945,8 +945,7 @@ async function joinFactions(ns, forceJoinFactions) {
         let newAugs = unownedAugs.filter(aug => !accessibleAugmentations.has(aug)); //  Filter out augmentations we can purchase from another faction we've already joined
         let desiredAugs = newAugs.filter(aug => augmentationData[aug].desired); //  Filter out augmentations we have no interest in
         log(ns, `${faction.name} has ${faction.augmentations.length} augs, ${unownedAugs.length} unpurchased, ${newAugs.length} not offered by joined factions, ` +
-            `${desiredAugs.length} with desirable stats` + (desiredAugs.length == 0 ? ' (not joining)' : `: ${JSON.stringify(desiredAugs)}`));
-        if (desiredAugs.length == 0 && !forceJoinFactions.includes(faction.name)) continue;
+            `${desiredAugs.length} with desirable stats` + (desiredAugs.length == 0 ? ' (joining anyway for favor/intelligence)' : `: ${JSON.stringify(desiredAugs)}`));
         if (manualJoin.includes(faction.name) && !forceJoinFactions.includes(faction.name))
             log(ns, `INFO: You have an invite from faction ${faction.name}, but it will not be automatically joined, ` +
                 `because this would prevent you from joining some other factions.`, printToTerminal, printToTerminal ? 'info' : undefined);
