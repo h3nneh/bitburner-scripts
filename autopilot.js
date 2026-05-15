@@ -103,12 +103,12 @@ const argsSchema = [ // The set of all command line arguments
     ['xp-mode-duration-minutes', 5], // The number of minutes to keep daemon.js in --xp-only mode before switching back to normal money-earning mode.
     ['money-focus', false], // In BN3 money mode, prioritize earning money and buying RAM over focus/side activities.
     ['no-tail-windows', false], // Set to true to prevent the default behaviour of opening a tail window for certain launched scripts. (Doesn't affect scripts that open their own tail windows)
-    ['tail-x', 675], // Default autopilot.js tail window x position.
+    ['tail-x', 1600], // Default autopilot.js tail window x position.
     ['tail-y', 0], // Default autopilot.js tail window y position.
     ['tail-width', 600], // Default autopilot.js tail window width.
     ['tail-height', 230], // Default autopilot.js tail window height.
-    ['work-tail-x', 1300], // Optional x position for the work-for-factions.js tail window.
-    ['work-tail-y', 0], // Optional y position for the work-for-factions.js tail window.
+    ['work-tail-x', 1600], // Optional x position for the work-for-factions.js tail window.
+    ['work-tail-y', 230], // Optional y position for the work-for-factions.js tail window.
     ['work-tail-width', 600], // Optional width for the work-for-factions.js tail window.
     ['work-tail-height', 230], // Optional height for the work-for-factions.js tail window.
     ['cross-city-background-training', true], // Let work-for-factions start gym training in a gym city, then travel elsewhere for infiltration while training continues.

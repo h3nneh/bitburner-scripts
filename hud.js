@@ -2,8 +2,8 @@
 export async function main(ns) {
     ns.disableLog('ALL');
     ns.tail();
-    ns.resizeTail(590, 330);
-    ns.moveTail(675, 240);
+    ns.resizeTail(590, 460);
+    ns.moveTail(1010, 0);
 
     const W = 68; // inner width between │ chars
 
