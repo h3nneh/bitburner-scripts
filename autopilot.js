@@ -1159,6 +1159,12 @@ export async function main(ns) {
                 tail(ns, daemonPid);
         }
 
+        // Launch hud.js once per reset if not already running (skip when --no-tail-windows)
+        if (!options['no-tail-windows'] && !findScript('hud.js')) {
+            const hudPid = ns.run(getFilePath('hud.js'), 1);
+            if (hudPid) log(ns, `INFO: Launched hud.js (pid: ${hudPid})`, false);
+        }
+
     }
 
     /** Buy exactly one missing BN10 Covenant sleeve infrastructure item when cash is already available.
