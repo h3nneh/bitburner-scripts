@@ -1205,7 +1205,7 @@ async function managePurchaseableAugs(ns, outputRows, accessibleAugs) {
     // NEXT STEP: Add as many NeuroFlux levels to our purchase as we can (unless disabled)
     if (options['neuroflux-disabled']) return;
     const remainingConcreteTargets = getConcreteTargetAugsNotInPurchaseOrder();
-    if (remainingConcreteTargets.length > 0) {
+    if (remainingConcreteTargets.length > 0 && purchaseableAugs.length > 0) {
         outputRows.push(`INFO: Not buying ${strNF} yet. ${remainingConcreteTargets.length} concrete target augmentation(s) remain, ` +
             `so ${strNF} is reserved for leftover cash after goals are complete: ` +
             remainingConcreteTargets.slice(0, 8).map(aug => `"${aug.name}"`).join(", ") +
