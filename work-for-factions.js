@@ -1711,6 +1711,9 @@ export async function workForSingleFaction(ns, factionName, forceThroughInvitePr
         factionRepRequired = Math.max(factionRepRequired, highestRepAug);
     if (forceRep !== true && forceRep > 0) // If forceRep is a number (not just a flag 'true'), ensure we earn the specified rep amount
         factionRepRequired = Math.max(factionRepRequired, forceRep)
+    // Once we've earned enough rep to unlock donations on the next reset, faction-manager can donate for the rest — no need to grind further
+    if (!forceBestAug && !forceRep && !forceUnlockDonations && favorRepRequired > 0 && favorRepRequired < factionRepRequired)
+        factionRepRequired = favorRepRequired;
     // Check for any reasons to skip working for this faction
     if (!forceRep && highestRepAug == -1 && !firstFactions.includes(factionName) && !options['get-invited-to-every-faction'])
         return ns.print(`All "${factionName}" augmentations are owned. Skipping unlocking faction...`);

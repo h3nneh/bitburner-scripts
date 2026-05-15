@@ -16,6 +16,10 @@ const argsSchema = [
     ['disable-spend-hashes', false], // An easy way to set the above to a very large negative number, thus never spending hashes for Money
 
     ['xp-only', false], // Focus on a strategy that produces the most hack EXP rather than money
+    ['share', undefined], // Enable sharing free RAM to boost faction rep gain (auto-enabled at 1TB network RAM)
+    ['no-share', false], // Disable sharing free RAM to boost faction rep gain
+    ['share-max-utilization', 0.8], // Share threads fill up to this fraction of total network RAM
+    ['share-cooldown', 5000], // ms between share scheduling attempts
     ['money-focus', false], // Relay to hack.js to prioritize money and skip hack-XP kickstarts.
     ['initial-study-time', 10], // Seconds. Set to 0 to not do any studying at startup. By default, if early in an augmentation, will start with a little study to boost hack XP
     ['initial-hack-xp-time', 10], // Seconds. Set to 0 to not do any hack-xp grinding at startup. By default, if early in an augmentation, will start with a little study to boost hack XP
@@ -160,6 +164,7 @@ export async function main(ns) {
     let homeServer = (/**@returns{Server}*/() => [])(); // Quick access to the home server object.
     // Lists of tools (external scripts) run
     let asynchronousHelpers, periodicScripts;
+    let lastShareTime = 0; // Tracks when share was last scheduled so we can respect the configured share-cooldown
     // Helper dict for remembering the names and costs of the scripts we use the most
     let toolsByShortName = (/**@returns{{[id: string]: Tool;}}*/() => undefined)(); // Dictionary of tools keyed by tool short name
     let allHelpersRunning = false; // Tracks whether all long-lived helper scripts have been launched
@@ -379,6 +384,7 @@ export async function main(ns) {
         // Log which flags are active
         if (options['money-focus']) log(ns, '--money-focus - Money-focused hacking mode activated; daemon startup XP helpers are disabled.');
         if (xpOnly) log(ns, '--xp-only - Hack XP Grinding mode activated!');
+        if (xpOnly && !options['no-share']) { options['no-share'] = true; log(ns, '--no-share implied by --xp-only'); }
         if (verbose) log(ns, '--verbose - Verbose logging activated!');
         if (runOnce) log(ns, '--run-once - Run-once mode activated!');
         if (loopingMode) {
@@ -707,7 +713,8 @@ export async function main(ns) {
         periodicScripts.forEach(tool => tool.ignoreReservedRam ??= false);
         if (verbose) // In verbose mode, have periodic sripts persist their logs.
             periodicScripts.forEach(tool => tool.runOptions = { temporary: false });
-        await buildToolkit(ns, [...asynchronousHelpers, ...periodicScripts]); // build launcher toolkit
+        await buildToolkit(ns, [...asynchronousHelpers, ...periodicScripts,
+            { name: "/Remote/share.js", shortName: "share", threadSpreadingAllowed: true }]); // build launcher toolkit
         await buildServerList(ns, false); // create the exhaustive server list
 
         // If we ascended less than 10 minutes ago, start with some study and/or XP cycles to quickly restore hack XP
@@ -922,6 +929,23 @@ export async function main(ns) {
             if (!allHelpersRunning || loops % 60 == 0)
                 allHelpersRunning = await runStartupScripts(ns);
             await runPeriodicScripts(ns);
+            // Share unused RAM to boost faction rep gain
+            if (!options['no-share'] && (options['share'] === true || getNetworkStats().totalMaxRam > 1024) &&
+                    (Date.now() - lastShareTime) > options['share-cooldown']) {
+                const network = getNetworkStats();
+                const utilizationPercent = network.totalUsedRam / network.totalMaxRam;
+                const maxShareUtilization = options['share-max-utilization'];
+                if (utilizationPercent < maxShareUtilization) {
+                    const shareTool = getTool('share');
+                    const maxThreads = shareTool.getMaxThreads();
+                    const shareThreads = Math.floor(maxThreads * (maxShareUtilization - utilizationPercent) / (1 - utilizationPercent));
+                    if (shareThreads > 0) {
+                        if (verbose) log(ns, `Scheduling ${shareThreads.toLocaleString('en')} share threads (utilization ${(100 * utilizationPercent).toFixed(1)}% → ${(100 * maxShareUtilization).toFixed(1)}% target)`);
+                        await arbitraryExecution(ns, shareTool, shareThreads, [Date.now()], null, true);
+                        lastShareTime = Date.now();
+                    }
+                }
+            }
         } while (!runOnce);
     }
 
