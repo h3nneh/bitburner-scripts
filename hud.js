@@ -112,6 +112,8 @@ export async function main(ns) {
         const nfPending   = ap?.nfPending   ?? 0;
         const affordList  = (fm?.affordable_augs ?? []).filter(a => a !== NF);
         const pb          = fm?.projBoost ?? ap?.projBoost ?? {};
+        const countdownTs = fm?.install_status?.install_countdown ?? 0;
+        const countdownMs = countdownTs > Date.now() ? countdownTs - Date.now() : 0;
 
         const homeMax  = ap?.homeRam     ?? ns.getServerMaxRam('home');
         const homeUsed = ap?.homeRamUsed ?? 0;
@@ -170,7 +172,7 @@ export async function main(ns) {
 
             sep(),
 
-            // ── Combat / Cha / Rep stats ─────────────────────────
+            // ── Combat stats ─────────────────────────────────────
             row(
                 t('str  '), t(String(player.skills.strength).padStart(5), GREEN),
                 t('  '), t(fmtMult(m?.strength), YELLOW), t('  exp'), t(fmtMult(m?.strength_exp), YELLOW),
@@ -183,6 +185,10 @@ export async function main(ns) {
                 t('  │  agi  '), t(String(player.skills.agility).padStart(5), GREEN),
                 t('  '), t(fmtMult(m?.agility), YELLOW), t('  exp'), t(fmtMult(m?.agility_exp), YELLOW),
             ),
+
+            sep(),
+
+            // ── Charisma + Rep ───────────────────────────────────
             row(
                 t('cha  '), t(String(player.skills.charisma).padStart(5), GREEN),
                 t('  '), t(fmtMult(m?.charisma), YELLOW), t('  exp'), t(fmtMult(m?.charisma_exp), YELLOW),
@@ -217,6 +223,11 @@ export async function main(ns) {
                     fmtList(affordList)),
                 repCost > 0 ? t(`  +don ${fmtMoney(repCost)}`, { ...GREY, ...PIN }) : '',
             ),
+            // Install countdown — only shown when active
+            countdownMs > 0 ? row(
+                t('Reset in:  ', PIN),
+                t(fmtDur(countdownMs), YELLOW),
+            ) : null,
 
             sep(),
 
