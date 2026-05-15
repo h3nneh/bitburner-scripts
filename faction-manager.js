@@ -346,6 +346,16 @@ export async function main(ns) {
 function buildAugmentationStatus() {
     const augsAwaitingInstall = ownedAugmentations.slice(installedAugmentations.length); // Assumes augs are returned in purchased order
     const nfInstalled = nfLevelPurchased - augsAwaitingInstall.filter(a => a == strNF).length;
+    // Compute projected multiplier boosts from all pending + affordable non-NF augs (used by hud.js)
+    const projBoost = { hacking: 1, hacking_money: 1, hacking_speed: 1, hacking_chance: 1, faction_rep: 1 };
+    for (const augName of [...augsAwaitingInstall, ...purchaseableAugs.map(a => a.name)].filter(a => a !== strNF)) {
+        const s = augmentationData[augName]?.stats ?? {};
+        if (s.hacking_level_mult)  projBoost.hacking        *= s.hacking_level_mult;
+        if (s.hacking_money_mult)  projBoost.hacking_money  *= s.hacking_money_mult;
+        if (s.hacking_speed_mult)  projBoost.hacking_speed  *= s.hacking_speed_mult;
+        if (s.hacking_chance_mult) projBoost.hacking_chance *= s.hacking_chance_mult;
+        if (s.faction_rep_mult)    projBoost.faction_rep    *= s.faction_rep_mult;
+    }
     return {
         installed_augs: installedAugmentations,
         installed_count: installedAugmentations.length,
@@ -366,6 +376,7 @@ function buildAugmentationStatus() {
         total_rep_cost: Object.values(purchaseFactionRepCosts).reduce((t, r) => t + r, 0),
         total_aug_cost: getTotalCost(purchaseableAugs),
         unpurchased_count: Object.values(augmentationData).filter(a => !a.owned).length,
+        projBoost,
     };
 }
 

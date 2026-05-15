@@ -1591,29 +1591,8 @@ export async function main(ns) {
     /** Write current autopilot state for hud.js to display. Zero RAM overhead (ramOverride already declared). */
     function writeHudState(ns) {
         const facman = getFactionManagerOutput(ns);
-
-        // Compute projected mult boosts from all pending + affordable non-NF augs
-        const projBoost = { hacking: 1, hacking_money: 1, hacking_speed: 1, hacking_chance: 1, faction_rep: 1 };
-        if (facman && singularityAvailable) {
-            const pending = [
-                ...(facman.awaiting_install_augs ?? []),
-                ...(facman.affordable_augs       ?? []),
-            ].filter(a => a !== 'Neuroflux Governor');
-            const keyMap = {
-                hacking:        'hacking_level_mult',
-                hacking_money:  'hacking_money_mult',
-                hacking_speed:  'hacking_speed_mult',
-                hacking_chance: 'hacking_chance_mult',
-                faction_rep:    'faction_rep_mult',
-            };
-            for (const aug of pending) {
-                try {
-                    const s = ns.singularity.getAugmentationStats(aug);
-                    for (const [k, sk] of Object.entries(keyMap))
-                        projBoost[k] *= (s[sk] ?? 1);
-                } catch { /* singularity unavailable or aug unknown */ }
-            }
-        }
+        // projBoost is computed by faction-manager.js (which already has getAugmentationStats in its RAM budget)
+        const projBoost = facman?.projBoost ?? {};
 
         ns.write(hudStateFile, JSON.stringify({
             ts: Date.now(),
