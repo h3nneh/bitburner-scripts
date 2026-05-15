@@ -8,9 +8,7 @@ export async function main(ns) {
     const React = globalThis.React;
     const e = (type, props, ...children) => React.createElement(type, props, ...children);
 
-    const W = 84; // inner width between box walls
-
-    // ── Style constants ──────────────────────────────────────────
+    // ── CSS style constants ──────────────────────────────────────
     const GREEN  = { color: '#0f0' };
     const YELLOW = { color: '#ff0' };
     const CYAN   = { color: '#0ff' };
@@ -20,26 +18,27 @@ export async function main(ns) {
     const BCYAN  = { color: '#0ff', fontWeight: 'bold' };
     const BOLD   = { fontWeight: 'bold' };
 
-    // ── Part: text fragment with optional style and known visible length ──
-    const P = (text, style = null) => ({ text: String(text), style, len: String(text).length });
-
-    // ── Box chrome ───────────────────────────────────────────────
-    const TOP = '┌' + '─'.repeat(W + 2) + '┐';
-    const MID = '├' + '─'.repeat(W + 2) + '┤';
-    const BOT = '└' + '─'.repeat(W + 2) + '┘';
-
-    /** Render one padded box row from an array of P() parts. */
-    const row = (...parts) => {
-        const totalLen = parts.reduce((sum, p) => sum + p.len, 0);
-        const pad = Math.max(0, W - totalLen);
-        return e('div', null,
-            '│ ',
-            ...parts.map(p => p.style ? e('span', { style: p.style }, p.text) : p.text),
-            ' '.repeat(pad) + ' │',
-        );
+    const BASE = {
+        fontFamily: 'Courier New, monospace',
+        fontSize:   '11px',
+        lineHeight: '1.3',
+        border:     '1px solid #0f0',
+        width:      '100%',
+        boxSizing:  'border-box',
+        whiteSpace: 'pre',
     };
+    const ROW = { display: 'flex', padding: '0 4px', alignItems: 'baseline' };
+    const SEP = { borderTop: '1px solid #0f0' };
+    // Span that fills remaining space and truncates with ellipsis
+    const FILL = { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' };
+    // Span that never shrinks (pinned content like labels / cost)
+    const PIN  = { flexShrink: 0 };
 
-    // ── Formatters ───────────────────────────────────────────────
+    // ── Helpers ──────────────────────────────────────────────────
+    const t   = (text, style = null) => style ? e('span', { style }, String(text)) : String(text);
+    const row = (...children)        => e('div', { style: ROW }, ...children);
+    const sep = ()                   => e('div', { style: SEP });
+
     const fmtMoney = (n) => {
         if (!n || isNaN(n)) return '$0';
         if (n >= 1e15) return `$${(n / 1e15).toFixed(2)}Q`;
@@ -69,11 +68,11 @@ export async function main(ns) {
         return '[' + '█'.repeat(filled) + '░'.repeat(width - filled) + ']';
     };
 
-    const fmtList = (list, maxLen = W - 10, max = 3, nameMax = 24) => {
+    // Aug list — CSS ellipsis handles truncation, so show up to 5 items
+    const fmtList = (list, max = 5) => {
         if (list.length === 0) return '—';
         const suffix = list.length > max ? ` +${list.length - max}` : '';
-        const names  = list.slice(0, max).map(a => a.length > nameMax ? a.substring(0, nameMax - 1) + '…' : a);
-        return (names.join(', ') + suffix).substring(0, maxLen);
+        return list.slice(0, max).join(', ') + suffix;
     };
 
     const NF = 'Neuroflux Governor';
@@ -89,113 +88,128 @@ export async function main(ns) {
     ];
 
     while (true) {
-        // ── Read state files ──────────────────────────────────────
+        // ── State files ───────────────────────────────────────────
         const ap = (() => { try { return JSON.parse(ns.read('/Temp/autopilot-hud.txt') || 'null'); } catch { return null; } })();
         const fm = (() => { try { return JSON.parse(ns.read('/Temp/affordable-augs.txt') || 'null'); } catch { return null; } })();
-        const ah = (() => { try { return JSON.parse(ns.read('/Temp/analyze-hack.txt') || 'null'); } catch { return null; } })();
+        const ah = (() => { try { return JSON.parse(ns.read('/Temp/analyze-hack.txt')   || 'null'); } catch { return null; } })();
 
-        // ── Live NS data ──────────────────────────────────────────
+        // ── Live data ─────────────────────────────────────────────
         const player = ns.getPlayer();
         const procs  = ns.ps('home').map(p => p.filename);
         const karma  = ns.heart.break();
 
-        // ── Section 1: BN + timers ────────────────────────────────
-        const bnStr  = `BN${ap?.bn ?? '?'}`;
-        const timers = `  │  In BN: ${fmtDur(ap?.timeInBn)}  │  Since reset: ${fmtDur(ap?.timeInAug)}`;
-
-        // ── Section 2: Money ──────────────────────────────────────
-        const cash   = player.money;
-        const stocks = ap?.stocksValue ?? 0;
-        const total  = cash + stocks;
-
-        // ── Section 3: Stats ──────────────────────────────────────
+        // ── Derived values ────────────────────────────────────────
+        const bnStr    = `BN${ap?.bn ?? '?'}`;
+        const cash     = player.money;
+        const stocks   = ap?.stocksValue ?? 0;
+        const total    = cash + stocks;
         const hackStr  = player.skills.hacking.toLocaleString('en');
         const karmaStr = Math.round(karma).toLocaleString('en');
         const killsStr = player.numPeopleKilled.toLocaleString('en');
-        const statsStr = `Hack: ${hackStr}  │  Karma: ${karmaStr}  │  Kills: ${killsStr}`;
+        const m        = player.mults;
 
-        // ── Section 4: Multipliers ────────────────────────────────
-        const m       = player.mults;
-        const hackM   = fmtMult(m?.hacking);
-        const moneyM  = fmtMult(m?.hacking_money);
-        const speedM  = fmtMult(m?.hacking_speed);
-        const chanceM = fmtMult(m?.hacking_chance);
-        const repM    = fmtMult(m?.faction_rep);
-
-        // ── Section 5: Status ─────────────────────────────────────
-        const statusStr = (ap?.status ?? '(no autopilot data — is autopilot.js running?)').substring(0, W);
-
-        // ── Section 6: Aug progress ───────────────────────────────
-        const instCount   = fm?.installed_count_ex_nf         ?? 0;
-        const affordCount = fm?.affordable_count_ex_nf         ?? 0;
-        const awaitCount  = fm?.awaiting_install_count_ex_nf   ?? 0;
-        const target      = ap?.augInstallTarget                ?? 6;
+        const statusStr   = ap?.status ?? '(no autopilot data — is autopilot.js running?)';
+        const instCount   = fm?.installed_count_ex_nf       ?? 0;
+        const affordCount = fm?.affordable_count_ex_nf       ?? 0;
+        const awaitCount  = fm?.awaiting_install_count_ex_nf ?? 0;
+        const augTarget   = ap?.augInstallTarget              ?? 6;
         const progress    = instCount + affordCount + awaitCount;
-        const barStr      = progressBar(progress, target);
-        const barLabel    = ` ${progress}/${target}  (inst:${instCount}  afford:${affordCount}  pend:${awaitCount})`;
+        const barStr      = progressBar(progress, augTarget);
+        const barLabel    = ` ${progress}/${augTarget}  (inst:${instCount}  afford:${affordCount}  pend:${awaitCount})`;
 
-        // ── Section 7: Aug lists ──────────────────────────────────
         const affordList = (fm?.affordable_augs       ?? []).filter(a => a !== NF);
         const awaitList  = (fm?.awaiting_install_augs ?? []).filter(a => a !== NF);
         const costStr    = fm?.total_aug_cost ? `  Cost: ${fmtMoney(fm.total_aug_cost)}` : '';
-        const affordStr  = fmtList(affordList, W - 9 - costStr.length);
-        const awaitStr   = fmtList(awaitList,  W - 9);
 
-        // ── Section 8: Target + RAM ───────────────────────────────
         const bestHost = ah?.[0]?.hostname ?? '';
         const bestRate = ah?.[0]?.gainRate ?? 0;
         const homeMax  = ap?.homeRam     ?? ns.getServerMaxRam('home');
         const homeUsed = ap?.homeRamUsed ?? 0;
         const homePct  = homeMax > 0 ? (100 * homeUsed / homeMax).toFixed(1) : '?';
-        const ramStr   = `  │  Home: ${fmtRam(homeMax)} ${homePct}%`;
-
-        // ── Section 9: Script health ──────────────────────────────
-        const scriptParts = scriptChecks.map(({ label, match }, i) => {
-            const running = procs.some(p => p.includes(match));
-            const sep     = i < scriptChecks.length - 1 ? '  ' : '';
-            return P(label + (running ? '✓' : '✗') + sep, running ? GREEN : GREY);
-        });
 
         // ── Render ────────────────────────────────────────────────
         ns.clearLog();
-        ns.printRaw(e('div', {
-            style: {
-                fontFamily: 'Courier New, monospace',
-                fontSize:   '11px',
-                lineHeight: '1.3',
-                whiteSpace: 'pre',
-                overflow:   'hidden',
-                maxWidth:   '100%',
-            },
-        },
-            e('div', null, TOP),
-            row(P(bnStr, ap ? BCYAN : GREY), P(timers)),
-            row(P('Cash: '), P(fmtMoney(cash), GREEN), P('  Stocks: '), P(fmtMoney(stocks), GREEN), P('  Total: '), P(fmtMoney(total), BGREEN)),
-            row(P(statsStr)),
-            e('div', null, MID),
+        ns.printRaw(e('div', { style: BASE },
+
+            // BN + timers
             row(
-                P('MULTS  hack '), P(hackM, YELLOW),
-                P('  money '), P(moneyM, YELLOW),
-                P('  speed '), P(speedM, YELLOW),
-                P('  chance '), P(chanceM, YELLOW),
-                P('  rep '), P(repM, YELLOW),
+                t(bnStr, ap ? BCYAN : GREY),
+                t(`  │  In BN: ${fmtDur(ap?.timeInBn)}  │  Since reset: ${fmtDur(ap?.timeInAug)}`),
             ),
-            e('div', null, MID),
-            row(P('STATUS: '), P(statusStr)),
-            e('div', null, MID),
-            row(P(barStr, BOLD), P(barLabel)),
-            row(P('Buy:     '), P(affordStr, affordList.length ? GREEN : GREY), P(costStr, YELLOW)),
-            row(P('Install: '), P(awaitStr, awaitList.length ? BLUE : GREY)),
-            e('div', null, MID),
+
+            // Money
             row(
-                P('Target: '),
-                bestHost ? P(bestHost, YELLOW) : P('(no data)', GREY),
-                bestHost ? P(`  (${fmtMoney(bestRate)}/s)`) : P(''),
-                P(ramStr),
+                t('Cash: '), t(fmtMoney(cash), GREEN),
+                t('  Stocks: '), t(fmtMoney(stocks), GREEN),
+                t('  Total: '), t(fmtMoney(total), BGREEN),
             ),
-            e('div', null, MID),
-            row(...scriptParts),
-            e('div', null, BOT),
+
+            // Stats
+            row(
+                t('Hack: '), t(hackStr),
+                t('  │  Karma: '), t(karmaStr),
+                t('  │  Kills: '), t(killsStr),
+            ),
+
+            sep(),
+
+            // Multipliers
+            row(
+                t('MULTS  hack '), t(fmtMult(m?.hacking), YELLOW),
+                t('  money '),     t(fmtMult(m?.hacking_money), YELLOW),
+                t('  speed '),     t(fmtMult(m?.hacking_speed), YELLOW),
+                t('  chance '),    t(fmtMult(m?.hacking_chance), YELLOW),
+                t('  rep '),       t(fmtMult(m?.faction_rep), YELLOW),
+            ),
+
+            sep(),
+
+            // Status — ellipsis on long text
+            e('div', { style: ROW },
+                t('STATUS: ', PIN),
+                e('span', { style: { ...FILL, color: ap ? '#fff' : '#666' } }, statusStr),
+            ),
+
+            sep(),
+
+            // Aug progress bar
+            row(t(barStr, BOLD), t(barLabel)),
+
+            // Buy list — aug names fill + cost pinned right
+            e('div', { style: ROW },
+                t('Buy:     ', PIN),
+                e('span', { style: { ...FILL, color: affordList.length ? '#0f0' : '#666' } },
+                    fmtList(affordList)),
+                t(costStr, { ...YELLOW, ...PIN }),
+            ),
+
+            // Install list
+            e('div', { style: ROW },
+                t('Install: ', PIN),
+                e('span', { style: { ...FILL, color: awaitList.length ? '#88f' : '#666' } },
+                    fmtList(awaitList)),
+            ),
+
+            sep(),
+
+            // Target + RAM (RAM pinned right)
+            e('div', { style: ROW },
+                t('Target: ', PIN),
+                t(bestHost || '—', { ...YELLOW, ...PIN }),
+                t(bestHost ? `  (${fmtMoney(bestRate)}/s)` : ''),
+                e('span', { style: FILL }),  // spacer
+                t(`Home: ${fmtRam(homeMax)} ${homePct}%`, PIN),
+            ),
+
+            sep(),
+
+            // Script health
+            row(...scriptChecks.map(({ label, match }, i) => {
+                const running = procs.some(p => p.includes(match));
+                const sep2    = i < scriptChecks.length - 1 ? '  ' : '';
+                return t(label + (running ? '✓' : '✗') + sep2, running ? GREEN : GREY);
+            })),
+
         ));
 
         await ns.sleep(2000);
