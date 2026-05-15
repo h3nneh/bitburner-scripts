@@ -1688,9 +1688,62 @@ export async function workForSingleFaction(ns, factionName, forceThroughInvitePr
         !shouldBypassPrioritizeInvitesForFaction(factionName) &&
         !forceThroughInvitePriority && !forceBestAug && !forceRep)
         return ns.print(`--prioritize-invites Skipping rep grind for newly-joined faction; collecting more invites first...`);
+    // Option 3: If donations are already unlocked, faction-manager handles rep via money — no need to grind.
+    if (!forceRep && !forceUnlockDonations && startingFavor >= favorToDonate)
+        return ns.print(`Donations unlocked for "${factionName}" (favor ${startingFavor?.toFixed(2)}/${favorToDonate}). Faction-manager will donate for rep. Skipping grind...`);
+    // Option 1: Compare direct faction work rep/sec vs best infiltration rep/sec, choose the faster method.
+    let useDirectWork = false;
+    let bestDirectWorkType = null;
+    let bestDirectRepRate = 0;
+    try {
+        const currentMoney = (await getPlayerInfo(ns)).money;
+        const remainingRepForComparison = Math.max(0, factionRepRequired - currentReputation);
+        const bestInfiltrationForComparison = await pickBestInfiltrationLocation(ns, remainingRepForComparison, currentMoney, "");
+        const infiltrationRepPerSec = bestInfiltrationForComparison
+            ? (bestInfiltrationForComparison.reward?.tradeRep || 0) / (estimateInfiltrationRunTimeMs(bestInfiltrationForComparison) / 1000)
+            : 0;
+        // Measure direct work rep rate (tries each work type, ~200ms each)
+        for (const work of Object.values(ns.enums.FactionWorkType)) {
+            if (!(await startWorkForFaction(ns, factionName, work, shouldFocus))) continue;
+            const rate = await measureFactionRepGainRate(ns, factionName);
+            if (rate > bestDirectRepRate) { bestDirectRepRate = rate; bestDirectWorkType = work; }
+        }
+        if (bestDirectWorkType && bestDirectRepRate > infiltrationRepPerSec) {
+            useDirectWork = true;
+            ns.print(`INFO: Direct faction work (${bestDirectWorkType}: ${formatNumberShort(bestDirectRepRate)} rep/s) beats infiltration (${formatNumberShort(infiltrationRepPerSec)} rep/s) for "${factionName}". Using direct work.`);
+            await startWorkForFaction(ns, factionName, bestDirectWorkType, shouldFocus);
+        } else {
+            ns.print(`INFO: Infiltration (${formatNumberShort(infiltrationRepPerSec)} rep/s) beats direct work (${formatNumberShort(bestDirectRepRate)} rep/s) for "${factionName}". Using infiltration.`);
+            await stop(ns); // stop any work started during measurement
+        }
+    } catch (err) {
+        ns.print(`WARN: Method comparison failed for "${factionName}": ${getErrorInfo(err)}. Defaulting to infiltration.`);
+        await stop(ns);
+    }
     let lastStatusUpdateTime = 0;
     let lastSelectedInfiltrationTarget = "";
     let stickyInfiltrationTarget = "";
+    if (useDirectWork) {
+        // Direct faction work loop
+        while ((currentReputation = (await getFactionReputation(ns, factionName))) < factionRepRequired) {
+            if (breakToMainLoop()) {
+                return ns.print('INFO: Interrupting faction work to check on high-level priorities.');
+            }
+            const currentWork = await getCurrentWorkInfo(ns);
+            if (!currentWork?.type || currentWork.type !== 'FACTION') {
+                if (await isValidInterruption(ns, currentWork)) return;
+                await startWorkForFaction(ns, factionName, bestDirectWorkType, shouldFocus);
+            }
+            const remainingRep = Math.max(0, factionRepRequired - currentReputation);
+            if (Date.now() > lastStatusUpdateTime + 60000) {
+                lastStatusUpdateTime = Date.now();
+                ns.print(`INFO: Working for "${factionName}" (${bestDirectWorkType}) — ${formatNumberShort(currentReputation)}/${formatNumberShort(factionRepRequired)} rep (${formatNumberShort(remainingRep)} remaining, ${formatNumberShort(bestDirectRepRate)} rep/s)`);
+            }
+            await ns.sleep(loopSleepInterval);
+        }
+        await stop(ns);
+        return true;
+    }
     while ((currentReputation = (await getFactionReputation(ns, factionName))) < factionRepRequired) {
         if (breakToMainLoop()) {
             return ns.print('INFO: Interrupting infiltration to check on high-level priorities.');
