@@ -1234,8 +1234,16 @@ async function managePurchaseableAugs(ns, outputRows, accessibleAugs) {
         else if (!getFrom || (factionData[getFrom].favor < factionWithMostFavor.favor && factionWithMostFavor.invited)) {
             outputRows.push(`Attempting to join faction ${factionWithMostFavor.name} to make it easier to earn rep for ${strNF}.`);
             joined = await joinFactions(ns, [factionWithMostFavor.name]);
-            if (!joinedFactions.includes(factionWithMostFavor.name))
-                outputRows.push(`Failed to join ${factionWithMostFavor.name}. NeuroFlux will not be accessible.`);
+            if (!joinedFactions.includes(factionWithMostFavor.name)) {
+                const invitedFactionsWithDonation = factionsWithAugAndInvite
+                    .filter(f => f.invited && f.favor >= getFavorToDonate() && ![gangFaction, ...factionsWithoutDonation].includes(f.name))
+                    .map(f => f.name);
+                if (invitedFactionsWithDonation.length > 0) {
+                    outputRows.push(`Failed to join ${factionWithMostFavor.name}. Trying donation-capable factions: ${invitedFactionsWithDonation.join(", ")}.`);
+                    joined += await joinFactions(ns, invitedFactionsWithDonation);
+                } else
+                    outputRows.push(`Failed to join ${factionWithMostFavor.name}. NeuroFlux will not be accessible.`);
+            }
             // If after the above potential attempt to join a faction offering NF we still can't afford it, we're done here
             getFrom = augNf.getFromJoined();
             if (!getFrom) return log(ns, "Cannot buy any NF due to no joined or joinable factions offering it.");
