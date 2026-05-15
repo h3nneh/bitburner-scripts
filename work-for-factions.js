@@ -305,9 +305,12 @@ export async function main(ns) {
     // Process configuration options
     firstFactions = (options['first'] || []).map(f => f.replaceAll('_', ' ')); // Factions that end up in this list will be prioritized and joined regardless of their augmentations available.
     options.skip = (options.skip || []).map(f => f.replaceAll('_', ' '));
+    // Fetch bitnode early so BN-specific defaults can be applied below
+    currentBitnode = (await getResetInfoRd(ns)).currentNode;
     // Default desired-stats if none were specified
     if (options['desired-stats'].length == 0)
         options['desired-stats'] = options['crime-focus'] ? ['str', 'def', 'dex', 'agi', 'faction_rep', 'hacknet', 'crime'] :
+            currentBitnode == 8 ? ['hacking', 'hacking_exp'] : // BN8: only hack level/exp matter (Daedalus req), money comes from stocks
             ['hacking', 'faction_rep', 'company_rep', 'charisma', 'hacknet', 'crime_money']
     // Default desired-augs if none were specified
     if (options['desired-augs'].length == 0)
@@ -401,7 +404,7 @@ async function loadStartupData(ns) {
     const isDesiredAug = aug => isRelevantAug(aug) && (
         options['desired-augs'].includes(aug) ||
         Object.keys(dictAugStats[aug]).length == 0 || options['desired-stats'].length == 0 ||
-        Object.keys(dictAugStats[aug]).some(key => options['desired-stats'].some(stat => key.includes(stat)))
+        Object.keys(dictAugStats[aug]).some(key => options['desired-stats'].some(stat => key.includes(stat)) && dictAugStats[aug][key] > 1)
     );
 
     mostExpensiveAugByFaction = Object.fromEntries(allKnownFactions.map(f => [f,
