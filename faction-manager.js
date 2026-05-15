@@ -64,7 +64,8 @@ function getReqDonationForRep(repNeeded, factionOrFactionName) {
 }
 
 function shouldAllowDonationForAug(aug) {
-    return aug?.name == augTRP && !ownedAugmentations.includes(augTRP);
+    if (!aug) return false;
+    return (aug.joinedFactionsWithAug?.() ?? []).some(f => canDonateToFaction(f));
 }
 
 function getReqDonationForAug(aug, factionOrFactionName = null) {
@@ -901,7 +902,7 @@ class AugmentationData {
                 augFactions.sort((a, b) => b.reputation - a.reputation)[0] || // Faction we are closest to being able to get it from (most rep)
                 augFactions[0])?.name; // First faction in our faction list order (which should be ordered by priority)
 
-        return augFactions.sort((a, b) => b.reputation - a.reputation)[0]?.name;
+        return augFactions.sort((a, b) => ((canDonateToFaction(b) ? 1 : 0) - (canDonateToFaction(a) ? 1 : 0)) || (b.reputation - a.reputation))[0]?.name;
     }
     /** @returns {string} A formatted row of information for this augmentation */
     toString() {
@@ -1064,7 +1065,7 @@ async function manageUnownedAugmentations(ns, ignoredAugs) {
             (options.purchase ? '' : ' Run with the --purchase flag to make the purchase.'), printToTerminal);
 }
 
-/** Helper to compute the total purchase cost for augmentations, including Red Pill donations when available.
+/** Helper to compute the total purchase cost for augmentations, including donations when available.
  * @param {AugmentationData[]} sortedAugs The augmentations we're purchasing, in the order we'll puchase them
  * @returns {[{[factionName: string]: number},number,number]} */
 function computeCosts(sortedAugs) {
@@ -1255,18 +1256,20 @@ async function managePurchaseableAugs(ns, outputRows, accessibleAugs) {
     while (augNfFaction && nfPurchased < 200) { // Limit to 200 to avoid breaking the game if near infinite money.
         const nextNfCost = augNf.price * (nfCountMult ** nfPurchased) * (augCountMult ** purchaseableAugs.length);
         const nextNfRep = augNf.reputation * (nfCountMult ** nfPurchased);
-        const nextNfRepCost = 0;
+        const nextNfRepCost = (nextNfRep <= augNfFaction.reputation || !canDonateToFaction(augNfFaction)) ? 0
+            : getReqDonationForRep(nextNfRep, augNfFaction);
         const totalCostWithNextNf = totalAugCost + nextNfCost + totalRepCost + nextNfRepCost;
         log(ns, `Adding ${nfPurchased + 1} NF (Level ${nextNfLevel}) Requires ${formatNumberShort(nextNfRep, 4)} reputation, ` +
             `would cost another ${getCostString(nextNfCost, nextNfRepCost)} for a ` +
             `total of ${getCostString(totalAugCost + nextNfCost, totalRepCost + nextNfRepCost)}`);
-        if (totalCostWithNextNf > budget || nextNfRep > augNfFaction.reputation) {
+        if (totalCostWithNextNf > budget || (nextNfRep > augNfFaction.reputation && !canDonateToFaction(augNfFaction))) {
             nextUpNf = `Next NF (L${nextNfLevel}) will be available at:`.padEnd(37) +
                 ` ${getCostString(totalAugCost + nextNfCost, totalRepCost + nextNfRepCost)}  Money (` +
                 `${(totalCostWithNextNf > budget ? '✗' : '✓')}) and ${formatNumberShort(nextNfRep)} Reputation with "${augNfFaction.name}" (` +
-                (nextNfRep > augNfFaction.reputation ? '✗' : '✓') +
-                ` have ${formatNumberShort(augNfFaction.reputation)})`;
-            break; // If we cannot afford the next NF, break
+                (nextNfRep > augNfFaction.reputation ? (canDonateToFaction(augNfFaction) ? '$' : '✗') : '✓') +
+                ` have ${formatNumberShort(augNfFaction.reputation)}` +
+                (canDonateToFaction(augNfFaction) ? `, can donate` : ``) + `)`;
+            break;
         }
         // Otherwise, add the next NF to the end of our purchase order as leftover spend after concrete goals.
         const nextNfPrice = augNf.price * (nfCountMult ** nfPurchased); // Note this should be the base price, before scaling for number of augs purchased
@@ -1274,11 +1277,14 @@ async function managePurchaseableAugs(ns, outputRows, accessibleAugs) {
         nfClone.displayName += ` Level ${nextNfLevel}`
         purchaseableAugs.push(nfClone);
         totalAugCost += nextNfCost;
+        totalRepCost += nextNfRepCost;
         nextNfLevel++;
         nfPurchased++;
     }
+    // Recompute purchaseFactionRepCosts to include any NF donation costs accumulated above
+    [purchaseFactionRepCosts] = computeCosts(purchaseableAugs);
     log(ns, `With ${formatMoney(budget)}, can afford to purchase ${nfPurchased} level${nfPurchased == 1 ? '' : 's'} of ${strNF}.` +
-        ` New total cost: ${getCostString(totalAugCost, totalRepCost)}`);
+        ` New total cost: ${getCostString(totalAugCost, Object.values(purchaseFactionRepCosts).reduce((t, r) => t + r, 0))}`);
     manageFilteredSubset(ns, outputRows, `(${purchaseableAugs.length - nfPurchased} Augs + ${nfPurchased} NF)`, purchaseableAugs, true, false, false);
     if (nextUpAug) outputRows.push(nextUpAug);
     if (nextUpNf) outputRows.push(nextUpNf);
