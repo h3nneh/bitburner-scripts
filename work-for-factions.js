@@ -1999,7 +1999,7 @@ function estimateInfiltrationRunTimeMs(infiltration) {
         return observedMs;
     const maxLevel = infiltration?.maxClearanceLevel || 1;
     const difficulty = infiltration?.difficulty || 0;
-    return 4000 * maxLevel + 2000 * difficulty;
+    return 2000 * maxLevel;
 }
 
 function estimateCombatTrainingTimeMs(player, requiredCombatStat) {
