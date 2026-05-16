@@ -3,7 +3,7 @@ export async function main(ns) {
     ns.disableLog('ALL');
     ns.ui.openTail();
     ns.ui.resizeTail(720, 530);
-    ns.ui.moveTail(880, 0);
+    ns.ui.moveTail(880, 340);
 
     const React = globalThis.React;
     const e = (type, props, ...children) => React.createElement(type, props, ...children);
@@ -148,16 +148,16 @@ export async function main(ns) {
             return t(` →×${((m?.[mk] ?? 1) * boost).toFixed(2)}`, INFO);
         };
 
-        // label(4) value(6)  ×mult  [→×proj]  [(exp ×mult)]
+        // label(4) value(6)  (×mult  [→×proj]  [exp ×mult])
         const statRow = (label, val, mk, ek, pk, col) => row(
             t(label.padEnd(4),                                    GREY),
             t((val != null ? String(val) : '').padStart(6),       col),
-            t('  '),
+            t('  ('),
             t(fmtM(m?.[mk]),                                      col),
             proj(mk, pk),
-            ek ? t('  (exp ',                                     GREY) : null,
+            ek ? t('  exp ',                                      GREY) : null,
             ek ? t(fmtM(m?.[ek]),                                 col)  : null,
-            ek ? t(')',                                            GREY) : null,
+            t(')',                                                 GREY),
         );
 
         // Augmentation derived values
@@ -189,10 +189,10 @@ export async function main(ns) {
             e('div', { style: ROW },
                 t('hack',                                          GREY),
                 t(String(player.skills.hacking).padStart(6),      HACK),
-                t('  '),
+                t('  ('),
                 t(fmtM(m?.hacking),                               HACK),
                 proj('hacking', 'hacking'),
-                t('  (exp ',                                       GREY),
+                t('  exp ',                                        GREY),
                 t(fmtM(m?.hacking_exp),                           HACK),
                 t(')',                                             GREY),
                 e('span', { style: FILL }),
