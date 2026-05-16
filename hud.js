@@ -149,8 +149,8 @@ export async function main(ns) {
             if (work.type === 'FACTION') {
                 const wt = work.factionWorkType ? ` [${work.factionWorkType.toLowerCase()}]` : '';
                 workStr = `${work.factionName}${wt}`;
-                if (wfFresh && wf.faction === work.factionName && wf.etaMs > 0)
-                    workEta = `  ETA ${fmtDur(wf.etaMs)}`;
+                if (wfFresh && wf.faction === work.factionName)
+                    workEta = wf.etaMs > 0 ? `  ETA ${fmtDur(wf.etaMs)}` : '';
                 else if (work.cyclesWorked != null)
                     workEta = `  for ${fmtDur(work.cyclesWorked * 200)}`;
             } else if (work.type === 'COMPANY') {
