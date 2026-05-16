@@ -83,10 +83,11 @@ export async function main(ns) {
 
     while (true) {
         // ── State files ───────────────────────────────────────────
-        const ap = (() => { try { return JSON.parse(ns.read('/Temp/autopilot-hud.txt') || 'null'); } catch { return null; } })();
-        const fm = (() => { try { return JSON.parse(ns.read('/Temp/affordable-augs.txt') || 'null'); } catch { return null; } })();
-        const wf = (() => { try { return JSON.parse(ns.read('/Temp/work-for-factions-hud.txt') || 'null'); } catch { return null; } })();
-        const bn = (() => { try { return JSON.parse(ns.read('/Temp/bitNode-multipliers.txt') || 'null') ?? {}; } catch { return {}; } })();
+        const ap      = (() => { try { return JSON.parse(ns.read('/Temp/autopilot-hud.txt') || 'null'); } catch { return null; } })();
+        const fm      = (() => { try { return JSON.parse(ns.read('/Temp/affordable-augs.txt') || 'null'); } catch { return null; } })();
+        const wf      = (() => { try { return JSON.parse(ns.read('/Temp/work-for-factions-hud.txt') || 'null'); } catch { return null; } })();
+        const bn      = (() => { try { return JSON.parse(ns.read('/Temp/bitNode-multipliers.txt') || 'null') ?? {}; } catch { return {}; } })();
+        const fmState = (() => { try { return JSON.parse(ns.read('/Temp/faction-manager-install-state.txt') || 'null'); } catch { return null; } })();
 
         // ── Live data ─────────────────────────────────────────────
         const player = ns.getPlayer();
@@ -134,7 +135,8 @@ export async function main(ns) {
         const nfInstalled = ap?.nfInstalled ?? 0;
         const nfPending   = ap?.nfPending   ?? 0;
         const affordList  = (fm?.affordable_augs ?? []).filter(a => a !== NF);
-        const countdownTs = fm?.install_status?.install_countdown ?? 0;
+        // fmState is not cleared by autopilot between runs; stable source for countdown
+        const countdownTs = fmState?.installCountdown || fm?.install_status?.install_countdown || 0;
         const countdownMs = countdownTs > Date.now() ? countdownTs - Date.now() : 0;
 
         const homeMax  = ap?.homeRam     ?? ns.getServerMaxRam('home');
