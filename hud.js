@@ -2,7 +2,7 @@
 export async function main(ns) {
     ns.disableLog('ALL');
     ns.ui.openTail();
-    ns.ui.resizeTail(720, 530);
+    ns.ui.resizeTail(660, 530);
     ns.ui.moveTail(1600, 460);
 
     const React = globalThis.React;
