@@ -3,7 +3,7 @@ export async function main(ns) {
     ns.disableLog('ALL');
     ns.ui.openTail();
     ns.ui.resizeTail(720, 530);
-    ns.ui.moveTail(880, 340);
+    ns.ui.moveTail(1600, 460);
 
     const React = globalThis.React;
     const e = (type, props, ...children) => React.createElement(type, props, ...children);
