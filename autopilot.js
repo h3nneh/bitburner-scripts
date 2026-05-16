@@ -610,6 +610,8 @@ export async function main(ns) {
         // If we've previously set a flag to wait for the daedalus invite and reserve money, try to speed-along joining them
         if (reservingMoneyForDaedalus && player.money >= moneyReq) { // If our cash has dipped below the threshold again, we may need to take action below
             prioritizeHackForDaedalus = false;
+            if (resetInfo.currentNode != 8)
+                disableStockmasterForDaedalus = true; // Stocks liquidated, now keep stockmaster offline until we have the invite
             return await getNsDataThroughFile(ns, 'ns.singularity.joinFaction(ns.args[0])', null, ["Daedalus"]); // Note, we should have already checked that we have SF4 access before reserving money
         }
 
@@ -642,8 +644,8 @@ export async function main(ns) {
             }
             reservingMoneyForDaedalus = true; // Flag to pause all spending (set reserve.txt) until we've gotten the Daedalus invite
             if (player.money < moneyReq) { // Only liquidate stocks if we don't have enough cash lying around.
-                if (resetInfo.currentNode != 8)
-                    disableStockmasterForDaedalus = true; // Flag to keep stockmaster offline until we've gotten a daedalus invite
+                // Don't disable stockmaster here — it must run with --liquidate to sell stocks.
+                // disableStockmasterForDaedalus is set once player.money >= moneyReq (above) to prevent rebuying.
                 log(ns, "INFO: Temporarily liquidating stocks to earn an invite to Daedalus...", true, 'info');
                 forceStockLiquidation = true;
             } // else if we don't liquidate stocks, and our money dips below 100E9 again, we can always do it on the next loop
