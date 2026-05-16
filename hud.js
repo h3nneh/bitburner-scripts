@@ -55,6 +55,20 @@ export async function main(ns) {
     // ×5.60 — always 5 chars
     const fmtM = (n) => (n != null && !isNaN(n)) ? `×${n.toFixed(2)}` : '    —';
 
+    // player.mults key → getBitNodeMultipliers() key (where 1:1 mapping exists)
+    const BN_MAP = {
+        hacking:       'HackingLevelMultiplier',
+        hacking_exp:   'HackExpGain',
+        hacking_money: 'ScriptHackMoney',
+        hacking_speed: 'HackingSpeedMultiplier',
+        strength:      'StrengthLevelMultiplier',
+        defense:       'DefenseLevelMultiplier',
+        dexterity:     'DexterityLevelMultiplier',
+        agility:       'AgilityLevelMultiplier',
+        charisma:      'CharismaLevelMultiplier',
+        faction_rep:   'FactionWorkRepGain',
+    };
+
     const NF = 'Neuroflux Governor';
 
     const scriptChecks = [
@@ -72,6 +86,7 @@ export async function main(ns) {
         const ap = (() => { try { return JSON.parse(ns.read('/Temp/autopilot-hud.txt') || 'null'); } catch { return null; } })();
         const fm = (() => { try { return JSON.parse(ns.read('/Temp/affordable-augs.txt') || 'null'); } catch { return null; } })();
         const wf = (() => { try { return JSON.parse(ns.read('/Temp/work-for-factions-hud.txt') || 'null'); } catch { return null; } })();
+        const bn = (() => { try { return JSON.parse(ns.read('/Temp/bitNode-multipliers.txt') || 'null') ?? {}; } catch { return {}; } })();
 
         // ── Live data ─────────────────────────────────────────────
         const player = ns.getPlayer();
@@ -104,6 +119,9 @@ export async function main(ns) {
         const killsStr = player.numPeopleKilled.toLocaleString('en');
         const m        = player.mults;
         const pb       = fm?.projBoost ?? ap?.projBoost ?? {};
+
+        // Effective mult = aug mult × BN mult (falls back to 1 for unmapped keys)
+        const eff = (mk) => (m?.[mk] ?? 1) * (bn[BN_MAP[mk]] ?? 1);
 
         const statusStr   = ap?.status ?? '(no autopilot data)';
         const instCount   = fm?.installed_count_ex_nf        ?? 0;
@@ -155,15 +173,15 @@ export async function main(ns) {
         const proj = (mk, pk) => {
             const boost = pk ? pb[pk] : null;
             if (!boost || boost < 1.001) return null;
-            return t(` →×${((m?.[mk] ?? 1) * boost).toFixed(2)}`, INFO);
+            return t(` →×${(eff(mk) * boost).toFixed(2)}`, INFO);
         };
 
-        // label(4) value(6)  (×mult  [→×proj]  [exp ×mult])
+        // label(4) value(6)  (×eff_mult  [→×proj]  [exp ×aug_mult])
         const statRow = (label, val, mk, ek, pk, col) => row(
             t(label.padEnd(4),                                    GREY),
             t((val != null ? String(val) : '').padStart(6),       col),
             t('  ('),
-            t(fmtM(m?.[mk]),                                      col),
+            t(fmtM(eff(mk)),                                      col),
             proj(mk, pk),
             ek ? t('  exp ',                                      GREY) : null,
             ek ? t(fmtM(m?.[ek]),                                 col)  : null,
@@ -175,7 +193,7 @@ export async function main(ns) {
         const nfAwaitCount    = fm?.awaiting_install_count_nf  ?? 0;
         const totalPendingNf  = nfAffordCount + nfAwaitCount;
         const hasProj         = Object.values(pb).some(v => v > 1.001);
-        const projTotal       = (mk) => t(`×${((m?.[mk] ?? 1) * (pb[mk] ?? 1)).toFixed(2)}`, INFO);
+        const projTotal       = (mk) => t(`×${(eff(mk) * (pb[mk] ?? 1)).toFixed(2)}`, INFO);
 
         // ── Render ────────────────────────────────────────────────
         ns.clearLog();
@@ -200,19 +218,19 @@ export async function main(ns) {
                 t('hack',                                          GREY),
                 t(String(player.skills.hacking).padStart(6),      HACK),
                 t('  ('),
-                t(fmtM(m?.hacking),                               HACK),
+                t(fmtM(eff('hacking')),                            HACK),
                 proj('hacking', 'hacking'),
                 t('  exp ',                                        GREY),
-                t(fmtM(m?.hacking_exp),                           HACK),
+                t(fmtM(eff('hacking_exp')),                        HACK),
                 t(')',                                             GREY),
                 e('span', { style: FILL }),
                 t(`karma ${karmaStr}  kills ${killsStr}`,          GREY),
             ),
             row(
                 t('    '),
-                t('money ',   GREY), t(fmtM(m?.hacking_money),  HACK), proj('hacking_money',  'hacking_money'),
-                t('  speed ',  GREY), t(fmtM(m?.hacking_speed),  HACK), proj('hacking_speed',  'hacking_speed'),
-                t('  chance ', GREY), t(fmtM(m?.hacking_chance), HACK), proj('hacking_chance', 'hacking_chance'),
+                t('money ',   GREY), t(fmtM(eff('hacking_money')),  HACK), proj('hacking_money',  'hacking_money'),
+                t('  speed ',  GREY), t(fmtM(eff('hacking_speed')),  HACK), proj('hacking_speed',  'hacking_speed'),
+                t('  chance ', GREY), t(fmtM(m?.hacking_chance),     HACK), proj('hacking_chance', 'hacking_chance'),
             ),
 
             sep(),
