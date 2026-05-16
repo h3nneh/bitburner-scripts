@@ -2,7 +2,7 @@
 export async function main(ns) {
     ns.disableLog('ALL');
     ns.ui.openTail();
-    ns.ui.resizeTail(720, 460);
+    ns.ui.resizeTail(720, 530);
     ns.ui.moveTail(880, 0);
 
     const React = globalThis.React;
@@ -115,18 +115,18 @@ export async function main(ns) {
         const nfInstalled = ap?.nfInstalled ?? 0;
         const nfPending   = ap?.nfPending   ?? 0;
         const affordList  = (fm?.affordable_augs ?? []).filter(a => a !== NF);
-        const countdownTs = fm?.install_status?.installCountdown ?? 0;
+        const countdownTs = fm?.install_status?.install_countdown ?? 0;
         const countdownMs = countdownTs > Date.now() ? countdownTs - Date.now() : 0;
 
         const homeMax  = ap?.homeRam     ?? ns.getServerMaxRam('home');
         const homeUsed = ap?.homeRamUsed ?? 0;
         const homePct  = homeMax > 0 ? (100 * homeUsed / homeMax).toFixed(1) : '?';
 
-        // Work description + elapsed time
+        // Work description (elapsed only — ETA needs work-for-factions state file)
         let workStr = '—';
         let workElapsed = '';
         if (work) {
-            if (work.cyclesWorked != null) workElapsed = `  (${fmtDur(work.cyclesWorked * 200)})`;
+            if (work.cyclesWorked != null) workElapsed = `  for ${fmtDur(work.cyclesWorked * 200)}`;
             if (work.type === 'FACTION') {
                 const wt = work.factionWorkType ? ` [${work.factionWorkType.toLowerCase()}]` : '';
                 workStr = `${work.factionName}${wt}`;
@@ -141,23 +141,31 @@ export async function main(ns) {
             }
         }
 
-        // Inline projected mult — only rendered when pending augs will actually boost this stat
+        // Inline projected mult — only rendered when pending augs boost this stat
         const proj = (mk, pk) => {
             const boost = pk ? pb[pk] : null;
             if (!boost || boost < 1.001) return null;
             return t(` →×${((m?.[mk] ?? 1) * boost).toFixed(2)}`, INFO);
         };
 
-        // label(4) value(6)  ×mult(5)  [→×proj]  [  exp ×mult(5)]
+        // label(4) value(6)  ×mult  [→×proj]  [(exp ×mult)]
         const statRow = (label, val, mk, ek, pk, col) => row(
             t(label.padEnd(4),                                    GREY),
             t((val != null ? String(val) : '').padStart(6),       col),
             t('  '),
             t(fmtM(m?.[mk]),                                      col),
             proj(mk, pk),
-            ek ? t('  exp ',                                      GREY) : null,
+            ek ? t('  (exp ',                                     GREY) : null,
             ek ? t(fmtM(m?.[ek]),                                 col)  : null,
+            ek ? t(')',                                            GREY) : null,
         );
+
+        // Augmentation derived values
+        const nfAffordCount   = fm?.affordable_count_nf        ?? 0;
+        const nfAwaitCount    = fm?.awaiting_install_count_nf  ?? 0;
+        const totalPendingNf  = nfAffordCount + nfAwaitCount;
+        const hasProj         = Object.values(pb).some(v => v > 1.001);
+        const projTotal       = (mk) => t(`×${((m?.[mk] ?? 1) * (pb[mk] ?? 1)).toFixed(2)}`, INFO);
 
         // ── Render ────────────────────────────────────────────────
         ns.clearLog();
@@ -184,8 +192,9 @@ export async function main(ns) {
                 t('  '),
                 t(fmtM(m?.hacking),                               HACK),
                 proj('hacking', 'hacking'),
-                t('  exp ',                                        GREY),
+                t('  (exp ',                                       GREY),
                 t(fmtM(m?.hacking_exp),                           HACK),
+                t(')',                                             GREY),
                 e('span', { style: FILL }),
                 t(`karma ${karmaStr}  kills ${killsStr}`,          GREY),
             ),
@@ -222,15 +231,34 @@ export async function main(ns) {
 
             // ── Augmentations ────────────────────────────────────
             e('div', { style: ROW },
-                t(`Augs  inst:${instCount}  afford:${affordCount}  pend:${awaitCount}`, PRIMARY),
+                t('Augs  ', GREY),
+                t(`inst:${instCount}  afford:${affordCount}  pend:${awaitCount}`, PRIMARY),
                 t(`  ${instCount + affordCount + awaitCount}/${augTarget}`, { ...BOLD, color: th.primary }),
                 t('  │  ', GREY),
                 t(`NF ×${nfInstalled}`, nfInstalled > 0 ? SUCCESS : GREY),
                 nfPending > 0 ? t(` +${nfPending}`, INFO) : null,
                 e('span', { style: FILL }),
-                totalCost > 0 ? t(fmtMoney(totalCost), { ...WARN, ...PIN }) : null,
-                countdownMs > 0 ? t(`  in ${fmtDur(countdownMs)}`, { ...INFO, ...PIN }) : null,
+                countdownMs > 0 ? t(`in ${fmtDur(countdownMs)}`, { ...INFO, ...PIN }) : null,
             ),
+            // Cost breakdown — shown when there's something to buy
+            totalCost > 0 ? e('div', { style: ROW },
+                t('cost  ', GREY),
+                t(fmtMoney(totalCost), WARN),
+                t('  =  augs ', GREY),
+                t(fmtMoney(augCost), WARN),
+                repCost > 0 ? t('  + rep ', GREY) : null,
+                repCost > 0 ? t(fmtMoney(repCost), WARN) : null,
+                t(`   [${affordCount} aug + ${totalPendingNf} NF]`, GREY),
+            ) : null,
+            // Projected post-install mults — shown when pending augs improve tracked stats
+            hasProj ? e('div', { style: ROW },
+                t('post  ', GREY),
+                t('hack ',    GREY), projTotal('hacking'),
+                t('  money ', GREY), projTotal('hacking_money'),
+                t('  speed ', GREY), projTotal('hacking_speed'),
+                t('  chance ',GREY), projTotal('hacking_chance'),
+                t('  rep ',   GREY), projTotal('faction_rep'),
+            ) : null,
             e('div', { style: ROW },
                 t('buy:  ', GREY),
                 e('span', { style: { ...FILL, color: affordList.length ? th.success : th.secondary } },
