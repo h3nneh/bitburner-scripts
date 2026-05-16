@@ -85,6 +85,11 @@ async function runInfiltrationAttempt(ns, options) {
         return { success: false, reason: 'start-failed' };
     }
     while (true) {
+        const activeSince = Number(ns.read(infiltrationActiveLockFile) || 0);
+        if (activeSince > 0 && Date.now() - activeSince > infiltrationPendingTimeout) {
+            clearInfiltrationActiveLock(ns);
+            return { success: false, reason: 'timeout' };
+        }
         const state = await getInfiltrationUiState(ns);
         if (state == "running") {
             await ns.sleep(100);
@@ -110,11 +115,6 @@ async function runInfiltrationAttempt(ns, options) {
             if (!await waitForInfiltrationIdle(ns, infiltrationTeardownTimeout))
                 log(ns, `WARNING: Infiltration UI did not fully clear after hospitalization at ${options.company}.`);
             return { success: false, reason: 'hospitalized' };
-        }
-        const activeSince = Number(ns.read(infiltrationActiveLockFile) || 0);
-        if (activeSince > 0 && Date.now() - activeSince > infiltrationPendingTimeout) {
-            clearInfiltrationActiveLock(ns);
-            return { success: false, reason: 'timeout' };
         }
         await ns.sleep(100);
     }
