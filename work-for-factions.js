@@ -200,7 +200,6 @@ let observedInfiltrationRunTimeByLocation = {};
 let lastNothingToDoStatus = "";
 let lastNothingToDoStatusUpdate = 0;
 let loopHadDeferredInvite = false;
-let lastLoopHadDeferredInvite = false;
 
 function shouldDeferSilhouette(player) {
     if (player.factions.includes("Silhouette"))
@@ -238,14 +237,6 @@ function printNothingToDoStatus(ns, status, cooldownMs = statusUpdateInterval) {
     lastNothingToDoStatus = status;
     lastNothingToDoStatusUpdate = now;
     ns.print(status);
-}
-
-function exitAfterDeferredInviteOnlyPass(ns) {
-    if (!loopHadDeferredInvite || breakToMainLoop()) return false;
-    lastLoopHadDeferredInvite = true;
-    printNothingToDoStatus(ns, `INFO: Faction work is blocked by deferred invite requirements. ` +
-        `Exiting so hacking/money automation can progress; daemon will retry faction work later.`);
-    return true;
 }
 
 function recordMoneyGateStatus(factionName, requirement, cash, stockValue) {
@@ -393,8 +384,7 @@ export async function main(ns) {
     scope = 0;
     while (true) { // After each loop, we will repeat all prevous work "strategies" to see if anything new has been unlocked, and add one more "strategy" to the queue
         try {
-            if (await mainLoop(ns) == "deferred-idle")
-                return;
+            await mainLoop(ns);
         } catch (err) {
             log(ns, 'WARNING: work-for-factions.js caught an unhandled error in its main loop. Trying again in 5 seconds...\n' + getErrorInfo(err), false, 'warning');
             await ns.sleep(loopSleepInterval);
@@ -489,8 +479,7 @@ let lastMainLoopMessage = "";
 
 /** @param {NS} ns */
 async function mainLoop(ns) {
-    if (!breakToMainLoop() && !lastLoopHadDeferredInvite) scope++; // Increase scope only after a clean no-work pass.
-    lastLoopHadDeferredInvite = false;
+    if (!breakToMainLoop()) scope++; // Increase scope each pass, including when deferred invites block lower strategies.
     loopHadDeferredInvite = false;
     scope = Math.min(scope, 10);
     mainLoopStart = Date.now();
@@ -581,7 +570,6 @@ async function mainLoop(ns) {
             return;
         }
     }
-    if (exitAfterDeferredInviteOnlyPass(ns)) return "deferred-idle";
     if (scope <= 1 || breakToMainLoop()) return;
 
     // Strategy 2: Grind XP with all priority factions that are joined or can be joined, until every single one has desired REP
@@ -598,20 +586,17 @@ async function mainLoop(ns) {
                 return;
         }
     }
-    if (exitAfterDeferredInviteOnlyPass(ns)) return "deferred-idle";
     if (scope <= 2 || breakToMainLoop()) return;
 
     // Strategy 3: Work for any megacorporations not yet completed to earn their faction invites. Once joined, we don't lose these factions on reset.
     let megacorpFactions = preferredCompanyFactionOrder.filter(f => !skipFactions.includes(f) && canPursueFaction(player, f));
     if (!options['no-company-work'])
         await workForAllMegacorps(ns, megacorpFactions, false);
-    if (exitAfterDeferredInviteOnlyPass(ns)) return "deferred-idle";
     if (scope <= 3 || breakToMainLoop()) return;
 
     // Strategy 4: Work for megacorps again, but this time also work for the company factions once the invite is earned
     if (!options['no-company-work'])
         await workForAllMegacorps(ns, megacorpFactions, true);
-    if (exitAfterDeferredInviteOnlyPass(ns)) return "deferred-idle";
     if (scope <= 4 || breakToMainLoop()) return;
 
     // Strategies 5+ now work towards getting an invite to *all factions in the game*
@@ -625,7 +610,6 @@ async function mainLoop(ns) {
     // Strategy 5: For *all factions in the game*, try to earn an invite and work for rep until we can afford the most-expensive *desired* aug.
     if (await workForFirstActionableFaction(ns, allFactionsWorkOrder.filter(f => !softCompletedFactions.includes(f)), faction => workForSingleFaction(ns, faction)))
         return;
-    if (exitAfterDeferredInviteOnlyPass(ns)) return "deferred-idle";
     if (scope <= 5 || breakToMainLoop()) return;
 
     // Strategy 6: Grind rep for all factions until donations are unlocked - so next reset we don't need to grind rep, just donate.
@@ -634,25 +618,21 @@ async function mainLoop(ns) {
         .concat(allIncompleteFactions.reverse().filter(f => !factionWorkOrder.includes(f)));
     if (await workForFirstActionableFaction(ns, allFactionsWorkOrderReversed, faction => workForSingleFaction(ns, faction, false, false, false, true))) // forceUnlockDonations = true
         return;
-    if (exitAfterDeferredInviteOnlyPass(ns)) return "deferred-idle";
     if (scope <= 6 || breakToMainLoop()) return;
 
     // Strategy 7: Revisit all factions until each has enough rep for its most expensive useful aug.
     if (await workForFirstActionableFaction(ns, allFactionsWorkOrderReversed, faction => workForSingleFaction(ns, faction, false, true))) // ForceBestAug = true
         return;
-    if (exitAfterDeferredInviteOnlyPass(ns)) return "deferred-idle";
     if (scope <= 7 || breakToMainLoop()) return;
 
     // Strategy 8: Next, revisit all factions and grind XP until we can afford the most expensive aug on this install.
     if (await workForFirstActionableFaction(ns, allFactionsWorkOrder, faction => workForSingleFaction(ns, faction, true, true))) // ForceBestAug = true
         return;
-    if (exitAfterDeferredInviteOnlyPass(ns)) return "deferred-idle";
     if (scope <= 8 || breakToMainLoop()) return;
 
     // Strategy 9: Final rep pass with forceRep enabled so already-joined factions are not skipped by any earlier heuristic.
     if (await workForFirstActionableFaction(ns, allFactionsWorkOrder, faction => workForSingleFaction(ns, faction, false, true, true))) // ForceRep = true
         return;
-    if (exitAfterDeferredInviteOnlyPass(ns)) return "deferred-idle";
     if (scope <= 9 || breakToMainLoop()) return;
 
     // Strategy 10: Busy ourselves for a while longer, then loop to see if there anything more we can do for the above factions
