@@ -167,6 +167,7 @@ const checkForNewPrioritiesInterval = 10 * 60 * 1000; // 10 minutes. Interrupt w
 const waitForFactionInviteTime = 30 * 1000; // The game will only issue one new invite every 25 seconds, so if you earned two by travelling to one city, might have to wait a while
 const infiltrationTravelFailedLocationCooldown = 60 * 1000; // Avoid spam-retrying a location we currently cannot travel to.
 const infiltrationActiveLockFile = "/Temp/work-for-factions-infiltration-active.txt";
+const workHudFile = "/Temp/work-for-factions-hud.txt";
 const minAdaptiveInfiltrationDifficulty = 1.0;
 const lowMoneyInfiltrationDifficulty = 2.5;
 const repInfiltrationDifficultyCap = 3.35;
@@ -1795,6 +1796,12 @@ export async function workForSingleFaction(ns, factionName, forceThroughInvitePr
                 await startWorkForFaction(ns, factionName, bestDirectWorkType, shouldFocus);
             }
             const remainingRep = Math.max(0, factionRepRequired - currentReputation);
+            ns.write(workHudFile, JSON.stringify({
+                ts: Date.now(), faction: factionName, workType: bestDirectWorkType,
+                currentRep: Math.round(currentReputation), targetRep: Math.round(factionRepRequired),
+                repPerSec: bestDirectRepRate,
+                etaMs: bestDirectRepRate > 0 ? Math.ceil(remainingRep / bestDirectRepRate * 1000) : 0,
+            }), 'w');
             if (Date.now() > lastStatusUpdateTime + 60000) {
                 lastStatusUpdateTime = Date.now();
                 ns.print(`INFO: Working for "${factionName}" (${bestDirectWorkType}) — ${formatNumberShort(currentReputation)}/${formatNumberShort(factionRepRequired)} rep (${formatNumberShort(remainingRep)} remaining, ${formatNumberShort(bestDirectRepRate)} rep/s)`);
@@ -1905,6 +1912,12 @@ export async function workForSingleFaction(ns, factionName, forceThroughInvitePr
             ns.print(`${status} Currently at ${Math.round(currentReputation).toLocaleString('en')}, ` +
                 `estimated ${estimatedRep} rep per run.`);
         }
+        ns.write(workHudFile, JSON.stringify({
+            ts: Date.now(), faction: factionName, workType: 'infiltration',
+            currentRep: Math.round(currentReputation), targetRep: Math.round(factionRepRequired),
+            repPerSec: (bestLocation.etaMs > 0 && remainingRep > 0) ? Math.round(remainingRep / (bestLocation.etaMs / 1000) * 10) / 10 : 0,
+            etaMs: bestLocation.etaMs || 0,
+        }), 'w');
         await tryBuyReputation(ns);
         await ns.sleep(loopSleepInterval);
         if (!forceBestAug && !forceRep) {
@@ -1919,6 +1932,7 @@ export async function workForSingleFaction(ns, factionName, forceThroughInvitePr
     if (currentReputation >= factionRepRequired)
         ns.print(`Attained ${Math.round(currentReputation).toLocaleString('en')} rep with "${factionName}" ` +
             `(needed ${factionRepRequired.toLocaleString('en')}).`);
+    ns.write(workHudFile, '', 'w');
     return currentReputation >= factionRepRequired;
 }
 

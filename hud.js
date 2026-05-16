@@ -71,6 +71,7 @@ export async function main(ns) {
         // ── State files ───────────────────────────────────────────
         const ap = (() => { try { return JSON.parse(ns.read('/Temp/autopilot-hud.txt') || 'null'); } catch { return null; } })();
         const fm = (() => { try { return JSON.parse(ns.read('/Temp/affordable-augs.txt') || 'null'); } catch { return null; } })();
+        const wf = (() => { try { return JSON.parse(ns.read('/Temp/work-for-factions-hud.txt') || 'null'); } catch { return null; } })();
 
         // ── Live data ─────────────────────────────────────────────
         const player = ns.getPlayer();
@@ -122,23 +123,32 @@ export async function main(ns) {
         const homeUsed = ap?.homeRamUsed ?? 0;
         const homePct  = homeMax > 0 ? (100 * homeUsed / homeMax).toFixed(1) : '?';
 
-        // Work description (elapsed only — ETA needs work-for-factions state file)
+        // Work description + ETA (from work-for-factions state) or elapsed fallback
+        const wfFresh = wf?.ts && Date.now() - wf.ts < 30000; // stale after 30s
         let workStr = '—';
-        let workElapsed = '';
+        let workEta = '';
         if (work) {
-            if (work.cyclesWorked != null) workElapsed = `  for ${fmtDur(work.cyclesWorked * 200)}`;
             if (work.type === 'FACTION') {
                 const wt = work.factionWorkType ? ` [${work.factionWorkType.toLowerCase()}]` : '';
                 workStr = `${work.factionName}${wt}`;
+                if (wfFresh && wf.faction === work.factionName && wf.etaMs > 0)
+                    workEta = `  ETA ${fmtDur(wf.etaMs)}`;
+                else if (work.cyclesWorked != null)
+                    workEta = `  for ${fmtDur(work.cyclesWorked * 200)}`;
             } else if (work.type === 'COMPANY') {
                 workStr = work.companyName;
+                if (work.cyclesWorked != null) workEta = `  for ${fmtDur(work.cyclesWorked * 200)}`;
             } else if (work.type === 'CLASS') {
                 workStr = 'Studying';
+                if (work.cyclesWorked != null) workEta = `  for ${fmtDur(work.cyclesWorked * 200)}`;
             } else if (work.type === 'CRIME') {
                 workStr = 'Crime';
             } else {
                 workStr = work.type ?? '?';
             }
+        } else if (wfFresh && wf.workType === 'infiltration' && wf.etaMs > 0) {
+            workStr = `${wf.faction} [infiltrating]`;
+            workEta = `  ETA ${fmtDur(wf.etaMs)}`;
         }
 
         // Inline projected mult — only rendered when pending augs boost this stat
@@ -271,8 +281,8 @@ export async function main(ns) {
             // ── Work + Home RAM ──────────────────────────────────
             e('div', { style: ROW },
                 t('Work:  ', GREY),
-                e('span', { style: { ...FILL, color: work ? th.warning : th.secondary } }, workStr),
-                workElapsed ? t(workElapsed, { ...GREY, ...PIN }) : null,
+                e('span', { style: { ...FILL, color: (work || wfFresh) ? th.warning : th.secondary } }, workStr),
+                workEta ? t(workEta, { ...GREY, ...PIN }) : null,
                 t(`  Home: ${fmtRam(homeMax)} ${homePct}%`, { color: th.primary, ...PIN }),
             ),
 
