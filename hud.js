@@ -240,6 +240,7 @@ export async function main(ns) {
             statRow('def', player.skills.defense,   'defense',   'defense_exp',   null, COMBAT),
             statRow('dex', player.skills.dexterity, 'dexterity', 'dexterity_exp', null, COMBAT),
             statRow('agi', player.skills.agility,   'agility',   'agility_exp',   null, COMBAT),
+            player.skills.intelligence > 0 ? statRow('int', player.skills.intelligence, 'intelligence', null, null, c(th.info)) : null,
 
             sep(),
 
