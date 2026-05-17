@@ -228,7 +228,7 @@ async function mainLoop(ns) {
     if (!options['disable-bladeburner'] && !playerInBladeburner)
         playerInBladeburner = await getNsDataThroughFile(ns, 'ns.bladeburner.inBladeburner()');
     const playerWorkInfo = await getCurrentWorkInfo(ns);
-    cachedPlayerFactions = await getNsDataThroughFile(ns, 'ns.singularity.getJoinedFactions()');
+    cachedPlayerFactions = playerInfo.factions ?? [];
     claimedFactionSlots = new Set();
     if (!playerInGang) playerInGang = !(2 in ownedSourceFiles) ? false : await getNsDataThroughFile(ns, 'ns.gang.inGang()');
     let globalReserve = Number(ns.read("reserve.txt") || 0);
