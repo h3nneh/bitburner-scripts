@@ -36,7 +36,6 @@ const bn8CashReserve = 25e6;
 const covenantFactionName = "The Covenant";
 const works = ['security', 'field', 'hacking']; // When doing faction work, we prioritize physical work since sleeves tend towards having those stats be highest
 const trainStats = ['strength', 'defense', 'dexterity', 'agility'];
-const trainStatsMap = {'strength': 'str', 'defense': 'def', 'dexterity': 'dex', 'agility': 'agi'};
 const trainSmarts = ['hacking', 'charisma'];
 const sleeveBbContractNames = ["Tracking", "Bounty Hunter", "Retirement"];
 const minBbContracts = 2; // There should be this many contracts remaining before sleeves attempt them
@@ -171,6 +170,7 @@ async function manageSleeveInfrastructure(ns, playerInfo, resetInfo, reserve, cu
     let spent = 0;
     let numSleeves = currentSleeveCount;
     let sleeves = sleeveInfo;
+    // BN10 reserve is meant to protect Covenant sleeve purchases from other scripts, not from sleeve.js itself.
     let availableMoney = playerInfo.money - (resetInfo.currentNode == 10 ? 0 : reserve);
     const targetSleeveCount = Math.min(8, 6 + (ownedSourceFiles[10] || 0));
 
@@ -286,7 +286,7 @@ async function mainLoop(ns) {
 
         // Decide what we think the sleeve should be doing for the next little while
         let [designatedTask, command, args, statusUpdate] =
-            await pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrain);
+            await pickSleeveTask(ns, playerInfo, playerWorkInfo, resetInfo, i, sleeve, canTrain, trainingReserve);
 
         // After picking sleeve tasks, take a note of the sleeve's health at the end of the prior loop so we can detect failures
         [lastSleeveHp[i], lastSleeveShock[i]] = [sleeve.hp.current, sleeve.shock];
@@ -309,9 +309,10 @@ async function mainLoop(ns) {
  * @param {NS} ns
  * @param {Player} playerInfo
  * @param {{ type: "COMPANY"|"FACTION"|"CLASS"|"CRIME", cyclesWorked: number, crimeType: string, classType: string, location: string, companyName: string, factionName: string, factionWorkType: string }} playerWorkInfo
+ * @param {ResetInfo} resetInfo
  * @param {SleevePerson} sleeve
  * @returns {Promise<[string, string, any[], string]>} a 4-tuple of task name, command, args, and status message */
-async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrain) {
+async function pickSleeveTask(ns, playerInfo, playerWorkInfo, resetInfo, i, sleeve, canTrain, trainingReserve) {
     // Initialize sleeve dicts on first loop
     if (lastSleeveHp[i] === undefined) lastSleeveHp[i] = sleeve.hp.current;
     if (lastSleeveShock[i] === undefined) lastSleeveShock[i] = sleeve.shock;
@@ -332,19 +333,21 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
             return shockRecoveryTask(sleeve, i, `there is a ${(options['shock-recovery'] * 100).toFixed(1)}% chance (--shock-recovery) of picking this task every minute until fully recovered.`);
     }
     // Train if our sleeve's physical stats aren't where we want them
-    if (canTrain || (playerWorkInfo.type == "CLASS" && playerInfo.money >= 5e6)) {
+    if (canTrain) {
         const univClasses = {
-            "hacking": (playerInfo.money < 5e6) ? ns.enums.UniversityClassType.computerScience : ns.enums.UniversityClassType.algorithms,
+            "hacking": ns.enums.UniversityClassType.algorithms,
             "charisma": ns.enums.UniversityClassType.leadership
         };
-        let untrainedStats = trainStats.filter(stat => (sleeve.skills[stat] < options[`train-to-${stat}`] && canTrain) || playerWorkInfo.classType == trainStatsMap[stat]);
-        let untrainedSmarts = trainSmarts.filter(smart => (sleeve.skills[smart] < options[`study-to-${smart}`] && canTrain) || playerWorkInfo.classType == univClasses[smart]);
+        let untrainedStats = trainStats.filter(stat => sleeve.skills[stat] < options[`train-to-${stat}`]);
+        let untrainedSmarts = trainSmarts.filter(smart => sleeve.skills[smart] < options[`study-to-${smart}`]);
 
         // prioritize physical training
         if (untrainedStats.length > 0) {
-            if (playerInfo.money < 5E6 && !promptedForTrainingBudget)
+            if (resetInfo.currentNode != 8 && playerInfo.money < 5E6 && !promptedForTrainingBudget)
                 await promptForTrainingBudget(ns); // If we've never checked, see if we can train into debt.
             if (sleeve.city != ns.enums.CityName.Sector12) {
+                if (!canAffordSleeveSpend(playerInfo, trainingReserve, cityTravelCost))
+                    return shockRecoveryTask(sleeve, i, `BN8 cash reserve blocks travel for paid gym training`);
                 log(ns, `Moving Sleeve ${i} from ${sleeve.city} to Sector-12 so that they can study at Powerhouse Gym.`);
                 await getNsDataThroughFile(ns, 'ns.sleeve.travel(ns.args[0], ns.args[1])', null, [i, ns.enums.CityName.Sector12]);
             }
@@ -358,9 +361,11 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
             ];
             // if we're tough enough, flip over to studying to improve the mental stats
         } else if (untrainedSmarts.length > 0) {
-            if (playerInfo.money < 5E6 && !promptedForTrainingBudget)
+            if (resetInfo.currentNode != 8 && playerInfo.money < 5E6 && !promptedForTrainingBudget)
                 await promptForTrainingBudget(ns); // check we can go into training debt
             if (sleeve.city != ns.enums.CityName.Volhaven) {
+                if (!canAffordSleeveSpend(playerInfo, trainingReserve, cityTravelCost))
+                    return shockRecoveryTask(sleeve, i, `BN8 cash reserve blocks travel for paid studying`);
                 log(ns, `Moving Sleeve ${i} from ${sleeve.city} to Volhaven so that they can study at ZB Institute.`);
                 await getNsDataThroughFile(ns, 'ns.sleeve.travel(ns.args[0], ns.args[1])', null, [i, ns.enums.CityName.Volhaven]);
             }
@@ -400,8 +405,6 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
         ];
     }
     // If gangs are available, prioritize homicide until we've got the requisite -54K karma to unlock them
-    // Pick the best crime based on success chances
-    var crime = options.crime || (await calculateCrimeChance(ns, sleeve, "Homicide")) >= options['homicide-chance-threshold'] ? 'Homicide' : 'Mug';
     if (!playerInGang && !options['disable-gang-homicide-priority'] && (2 in ownedSourceFiles) && ns.heart.break() > -54000)
         return await crimeTask(ns, 'Homicide', i, sleeve, 'we want gang karma'); // Ignore chance - even a failed homicide generates more Karma than every other crime
     // If the player is in bladeburner, and has already unlocked gangs with Karma, generate contracts and operations
@@ -460,6 +463,9 @@ async function pickSleeveTask(ns, playerInfo, playerWorkInfo, i, sleeve, canTrai
                     `earning rep with faction ${faction} by doing ${work} work.`];
         }
     }
+    // If there's nothing more productive to do and there's still shock, prioritize recovery
+    if (sleeve.shock > 0)
+        return shockRecoveryTask(sleeve, i, `there appears to be nothing better to do`);
     // Finally, farm intelligence as there appears to be nothing better to do.
     return await farmIntelligence(ns, sleeve, i, `there appears to be nothing better to do`);
 }
@@ -524,8 +530,19 @@ async function setSleeveTask(ns, i, designatedTask, command, args) {
             return true;
         }
     } catch { }
-    // If working for a faction, it's possible he current work isn't supported, so try the next one.
-    if (designatedTask.startsWith('Bladeburner')) { // Bladeburner action may be out of operations
+    // If assigning the task failed...
+    lastRerollTime[i] = 0;
+    // If working for a faction, it's possible the current work isn't supported, so try the next one.
+    if (designatedTask.startsWith('work for faction')) {
+        const faction = args[1]; // Hack: Not obvious, but the second argument will be the faction name in this case.
+        let nextWorkIndex = (workByFaction[faction] || 0) + 1;
+        if (nextWorkIndex >= works.length) {
+            log(ns, `WARN: Failed to ${strAction}. None of the ${works.length} work types appear to be supported. Will loop back and try again.`, true, 'warning');
+            nextWorkIndex = 0;
+        } else
+            log(ns, `INFO: Failed to ${strAction} - work type may not be supported. Trying the next work type (${works[nextWorkIndex]})`);
+        workByFaction[faction] = nextWorkIndex;
+    } else if (designatedTask.startsWith('Bladeburner')) { // Bladeburner action may be out of operations
         bladeburnerCooldown[i] = Date.now(); // There will be a cooldown before this task is assigned again.
     } else
         log(ns, `ERROR: Failed to ${strAction}`, true, 'error');
