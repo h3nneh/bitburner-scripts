@@ -454,7 +454,7 @@ export async function main(ns) {
         }
 
         function shouldPrioritizeFactionWork() {
-            return !!options['cashroot-priority'];
+            return options['bn3-first-install'] || !!options['cashroot-priority'];
         }
 
         function shouldUseRushGangFactionMode() {
@@ -606,18 +606,20 @@ export async function main(ns) {
                 return false;
             return await canRunWorkForFactionsAfterFocus();
         };
+        const workForFactionsHelper = {
+            name: "work-for-factions.js",
+            args: () => options['autopilot-mode'] ? getAutopilotWorkForFactionsArgs() : defaultWorkForFactionsArgs,  // Singularity script to manage how we use our "focus" work.
+            shouldRun: shouldRunWorkForFactions,
+            restartOnArgsChange: true,
+            relaunchIfExited: true,
+            cooldownMs: shouldPrioritizeFactionWork() ? 60 * 1000 : 5 * 60 * 1000,
+            ignoreReservedRam: shouldPrioritizeFactionWork(),
+        };
         asynchronousHelpers = [
+            ...(shouldPrioritizeFactionWork() ? [workForFactionsHelper] : []),
             { name: "hack.js", args: () => getManagedHackArgs(ns), shouldTail: false, restartOnArgsChange: true, relaunchIfExited: true, ignoreReservedRam: false }, // Dedicated hacking/prep/targeting runner split out from daemon orchestration.
             { name: "stats.js", shouldRun: () => reqRam(64), shouldTail: false }, // Adds stats not usually in the HUD (nice to have)
-            {
-                name: "work-for-factions.js",
-                args: () => options['autopilot-mode'] ? getAutopilotWorkForFactionsArgs() : defaultWorkForFactionsArgs,  // Singularity script to manage how we use our "focus" work.
-                shouldRun: shouldRunWorkForFactions,
-                restartOnArgsChange: true,
-                relaunchIfExited: true,
-                cooldownMs: 5 * 60 * 1000,
-                ignoreReservedRam: false,
-            },
+            ...(!shouldPrioritizeFactionWork() ? [workForFactionsHelper] : []),
             { name: "go.js", shouldRun: async () => !isMoneyFocusSpendingLocked() && !(await isWorkForFactionsPending()) && reqRam(64) && homeServer.ramAvailable(/*ignoreReservedRam:*/true) >= 20, minRamReq: 20.2, shouldTail: options['tail-go'] }, // Play go.js (various multipliers, but large dynamic ram requirements)
             {
                 name: "stockmaster.js",
@@ -942,12 +944,15 @@ export async function main(ns) {
     }
 
     function applyToolTailLayout(ns, tool, pid) {
-        if (tool.tailLayout === "work") {
-            if (Number(options['work-tail-x']) >= 0 && Number(options['work-tail-y']) >= 0)
-                ns.moveTail(options['work-tail-x'], options['work-tail-y'], pid);
-            if (Number(options['work-tail-width']) > 0 && Number(options['work-tail-height']) > 0)
-                ns.resizeTail(options['work-tail-width'], options['work-tail-height'], pid);
-        }
+        if (tool.tailLayout != "work") return;
+        const width = Number(options['work-tail-width']);
+        const height = Number(options['work-tail-height']);
+        const x = Number(options['work-tail-x']);
+        const y = Number(options['work-tail-y']);
+        if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0)
+            ns.ui.resizeTail(width, height, pid);
+        if (Number.isFinite(x) && Number.isFinite(y) && x >= 0 && y >= 0)
+            ns.ui.moveTail(x, y, pid);
     }
 
     function tailToolIfNeeded(ns, tool, pid) {
