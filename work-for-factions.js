@@ -177,10 +177,13 @@ const bn8StockBackedTrainingReserve = 100e6;
 const stockBackedTrainingReserve = 10e6;
 const silhouetteStatDeferralMargin = 100;
 const maxOptionalCombatTrainingEtaMs = 8 * 60 * 60 * 1000;
+const maxCombatInviteTrainingEtaMs = 2 * 60 * 60 * 1000;
+const maxFinalNeuroFluxRepTopUp = 25000;
+const factionWorkIdleStatusFile = "/Temp/work-for-factions-idle-status.txt";
 
 let shouldFocus; // Whether we should focus on work or let it be backgrounded (based on whether "Neuroreceptor Management Implant" is owned, or "--no-focus" is specified)
 // And a bunch of globals because managing state and encapsulation is hard.
-let hasFocusPenalty, hasSimulacrum, hasRedPillPurchased, fulcrumHackReq, playerInBladeburner, wasGrafting, currentBitnode, notifiedAboutDaedalus;
+let hasFocusPenalty, hasSimulacrum, hasRedPillPurchased, fulcrumHackReq, playerInBladeburner, wasGrafting, currentBitnode, notifiedAboutDaedalus, bn3FirstInstallPending;
 let dictSourceFiles, dictFactionFavors, playerGang, mainLoopStart, scope, numJoinedFactions, lastTravel, crimeCount;
 let firstFactions, skipFactions, completedFactions, softCompletedFactions, mostExpensiveAugByFaction, mostExpensiveDesiredAugByFaction, mostExpensiveDesiredAugCostByFaction;
 let scriptPid = "?";
@@ -200,6 +203,16 @@ let observedInfiltrationRunTimeByLocation = {};
 let lastNothingToDoStatus = "";
 let lastNothingToDoStatusUpdate = 0;
 let loopHadDeferredInvite = false;
+
+function writeFactionWorkIdleStatus(ns, resetInfo, reason, detail = "") {
+    ns.write(factionWorkIdleStatusFile, JSON.stringify({
+        reason,
+        detail,
+        updated: Date.now(),
+        lastAugReset: resetInfo.lastAugReset,
+        currentBitnode,
+    }), "w");
+}
 
 function shouldDeferSilhouette(player) {
     if (player.factions.includes("Silhouette"))
@@ -283,8 +296,20 @@ function shouldDeferCompanyFaction(player, factionName) {
     return player.skills.hacking < getCompanyInviteHackRequirement(factionName);
 }
 
+function getPrecludingJoinedFaction(joinedFactions, factionName) {
+    if (["Aevum", "Sector-12"].includes(factionName))
+        return ["Chongqing", "New Tokyo", "Ishima", "Volhaven"].find(f => joinedFactions.includes(f));
+    if (["Chongqing", "New Tokyo", "Ishima"].includes(factionName))
+        return ["Aevum", "Sector-12", "Volhaven"].find(f => joinedFactions.includes(f));
+    if (factionName == "Volhaven")
+        return ["Aevum", "Sector-12", "Chongqing", "New Tokyo", "Ishima"].find(f => joinedFactions.includes(f));
+    return null;
+}
+
 function canPursueFaction(player, factionName) {
     if (isBn8() && factionName != "Daedalus" && (player.factions.includes("Daedalus") || hasRedPillPurchased))
+        return false;
+    if (getPrecludingJoinedFaction(player.factions, factionName))
         return false;
     if (isCompanyInviteFaction(factionName) && factionName !== "Silhouette")
         return !shouldDeferCompanyFaction(player, factionName);
@@ -296,6 +321,10 @@ function canPursueFaction(player, factionName) {
 }
 
 function shouldBypassPrioritizeInvitesForFaction(factionName) {
+    if (bn3FirstInstallPending && factionName == "Sector-12") return true;
+    if (currentBitnode == 3 && factionName == "Sector-12" && !skipFactions.includes("Sector-12") &&
+        (mostExpensiveAugByFaction["Sector-12"] || -1) > 0)
+        return true;
     return currentBitnode == 3 && options['crime-focus'] && factionName == "Slum Snakes";
 }
 
@@ -330,7 +359,7 @@ export async function main(ns) {
 
     // Reset globals whose value can persist between script restarts in weird situations
     lastTravel = crimeCount = currentBitnode = 0;
-    playerInBladeburner = wasGrafting = notifiedAboutDaedalus = false;
+    playerInBladeburner = wasGrafting = notifiedAboutDaedalus = bn3FirstInstallPending = false;
     recentHospitalizedLocations = {};
     lastMoneyFallbackStatus = lastNoFactionInfiltrationTargetStatus = "";
     lastNoFactionInfiltrationTargetStatusUpdate = 0;
@@ -418,6 +447,7 @@ async function loadStartupData(ns) {
     shouldFocus = !options['no-focus'] && hasFocusPenalty; // Focus at work for the best rate of rep gain, unless focus activities are disabled via command line
     hasSimulacrum = installedAugmentations.includes("The Blade's Simulacrum");
     hasRedPillPurchased = purchasedAugmentations.includes("The Red Pill");
+    bn3FirstInstallPending = currentBitnode == 3 && installedAugmentations.filter(aug => aug != strNF).length == 0;
 
     // Find out if we're in a gang
     const gangInfo = await getGangInfo(ns);
@@ -538,7 +568,9 @@ async function mainLoop(ns) {
     moneyGateStatus = null;
 
     // Remove Fulcrum from our "EarlyFactionOrder" if hack level is insufficient to backdoor their server
-    let priorityFactions = options['crime-focus'] ? preferredCrimeFactionOrder.slice() : preferredEarlyFactionOrder.slice();
+    let priorityFactions = bn3FirstInstallPending || !options['crime-focus'] ? preferredEarlyFactionOrder.slice() : preferredCrimeFactionOrder.slice();
+    if (bn3FirstInstallPending)
+        ns.print(`BN3 first-install mode: prioritizing Sector-12 for the fastest first augmentation before crime/gang faction setup.`);
     if (player.skills.hacking < fulcrumHackReq - 10) { // Assume that if we're within 10, we'll get there by the time we've earned the invite
         const fulcrumIdx = priorityFactions.findIndex(c => c == "Fulcrum Secret Technologies")
         if (fulcrumIdx !== -1) {
@@ -556,7 +588,10 @@ async function mainLoop(ns) {
         priorityFactions = priorityFactions.filter(f => f != "Silhouette");
 
     // Strategy 1: Tackle a consolidated list of desired faction order, interleaving simple factions and megacorporations
-    const pinnedFirstFactions = options['crime-focus'] || skipFactions.includes("Sector-12") ? firstFactions : ["Sector-12"].concat(firstFactions.filter(f => f != "Sector-12"));
+    const shouldPinSector12 = currentBitnode == 3 && !skipFactions.includes("Sector-12") &&
+        (mostExpensiveAugByFaction["Sector-12"] || -1) > 0;
+    const pinnedFirstFactions = bn3FirstInstallPending || shouldPinSector12 || (!options['crime-focus'] && !skipFactions.includes("Sector-12")) ?
+        ["Sector-12"].concat(firstFactions.filter(f => f != "Sector-12")) : firstFactions;
     const factionWorkOrder = pinnedFirstFactions.concat(priorityFactions.filter(f => // Remove factions from our initial "work order" if we've bought all desired augmentations.
         !pinnedFirstFactions.includes(f) && !skipFactions.includes(f) && !softCompletedFactions.includes(f) && canPursueFaction(player, f)));
     for (const faction of factionWorkOrder) {
@@ -653,6 +688,15 @@ async function mainLoop(ns) {
             foundWork = await workForSingleFaction(ns, mostFavorFaction, false, false, targetRep);
         }
     }
+    if (!foundWork) {
+        const nfTopUp = await getFinalNeuroFluxRepTopUp(ns, factionsWeCanWorkFor);
+        if (nfTopUp) {
+            ns.print(`INFO: No concrete faction work remains. Doing short final ${strNF} rep top-up with ` +
+                `${nfTopUp.faction}: ${formatNumberShort(nfTopUp.currentRep)} -> ${formatNumberShort(nfTopUp.targetRep)} ` +
+                `(missing ${formatNumberShort(nfTopUp.repGap)}, cap ${formatNumberShort(maxFinalNeuroFluxRepTopUp)}).`);
+            foundWork = await workForSingleFaction(ns, nfTopUp.faction, true, false, nfTopUp.targetRep);
+        }
+    }
     if (!foundWork) { // If our hands are tied, wait and re-check later rather than farming money with no explicit target.
         if (allIncompleteFactions.length == 0 && factionsNeedingMoreRep.length == 0)
             ns.print(`INFO: Nothing to do. All relevant factions are already complete or intentionally skipped. Sleeping for 30 seconds.`);
@@ -661,9 +705,25 @@ async function mainLoop(ns) {
         else
             printNothingToDoStatus(ns, `INFO: Nothing actionable for faction work right now. Waiting 30 seconds for ` +
                 `background hacking/money/invite progress before rechecking.`);
+        writeFactionWorkIdleStatus(ns, resetInfo, "nothing-actionable", "No actionable faction work remains right now.");
         await ns.sleep(30000);
     }
     if (scope <= 10) scope--; // Cap the 'scope' value from increasing perpetually when we're on our last strategy
+}
+
+async function getFinalNeuroFluxRepTopUp(ns, candidateFactions) {
+    if (currentBitnode == 8 || options['crime-focus'] || options['invites-only']) return null;
+    const nfRepReq = dictAugRepReqs[strNF];
+    if (!Number.isFinite(nfRepReq) || nfRepReq <= 0) return null;
+    const candidates = [];
+    for (const faction of candidateFactions) {
+        if (!dictFactionAugs[faction]?.includes(strNF)) continue;
+        const currentRep = await getFactionReputation(ns, faction);
+        const repGap = nfRepReq - currentRep;
+        if (repGap <= 0 || repGap > maxFinalNeuroFluxRepTopUp) continue;
+        candidates.push({ faction, currentRep, targetRep: nfRepReq, repGap, favor: dictFactionFavors[faction] || 0 });
+    }
+    return candidates.sort((a, b) => a.repGap - b.repGap || b.favor - a.favor || a.faction.localeCompare(b.faction))[0] || null;
 }
 
 async function workForFirstActionableFaction(ns, factionOrder, workFn) {
@@ -825,15 +885,24 @@ async function earnFactionInvite(ns, factionName) {
             ns.print(`Ignoring combat requirement for ${factionName} as we are more likely to unlock them via hacking stats.`);
     }
     else if (deficientStats.length > 0) {
-        ns.print(`${reasonPrefix} you have insufficient combat stats. Need: ${requirement} of each, Have ` +
-            physicalStats.map(s => `${s.slice(0, 3)}: ${player.skills[s]}`).join(", "));
         const needsKills = (requiredKillsByFaction[factionName] || 0) > player.numPeopleKilled;
         const needsKarma = (requiredKarmaByFaction[factionName] || 0) > currentNegativeKarma;
         const maxCombatGap = Math.max(...deficientStats.map(s => requirement - s.value));
         const deferCombatGap = Math.max(25, Math.floor(requirement * 0.15));
+        const combatTraining = getCombatTrainingAssessment(player, requirement);
+        const combatStatsSummary = physicalStats.map(s => `${s.slice(0, 3)}: ${player.skills[s]}`).join(", ");
+        if (!needsKills && !needsKarma && (!Number.isFinite(combatTraining.plan.sequentialEtaMs) ||
+            combatTraining.plan.sequentialEtaMs > maxCombatInviteTrainingEtaMs))
+            return deferFactionInvite(ns, factionName, `Deferring faction "${factionName}" invite because combat gym training is too early. ` +
+                `Need ${requirement} of each; have ${combatStatsSummary}; largest gap ${maxCombatGap}; ETA ` +
+                `${formatDuration(combatTraining.plan.sequentialEtaMs)} exceeds practical threshold ` +
+                `${formatDuration(maxCombatInviteTrainingEtaMs)}. Background hacking/augmentations should improve this.`);
+        ns.print(`${reasonPrefix} you have insufficient combat stats. Need: ${requirement} of each, Have ${combatStatsSummary}. ` +
+            `Gym ETA ${formatDuration(combatTraining.plan.sequentialEtaMs)}.`);
         if (options['prioritize-invites'] && !needsKills && !needsKarma && maxCombatGap > deferCombatGap)
             return ns.print(`Deferring faction "${factionName}" invite because only combat training remains and the gap is still large ` +
-                `(${maxCombatGap} levels, threshold ${deferCombatGap}) while --prioritize-invites is enabled.`);
+                `(${maxCombatGap} levels, threshold ${deferCombatGap}, gym ETA ${formatDuration(combatTraining.plan.sequentialEtaMs)}) ` +
+                `while --prioritize-invites is enabled.`);
         if (!needsKills && !needsKarma) {
             workedForInvite = await trainCombatStatsUpTo(ns, requirement, factionName);
         } else {
