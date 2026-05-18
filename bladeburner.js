@@ -109,7 +109,8 @@ async function gatherBladeburnerInfo(ns) {
     const blackOpsToBeDone = await getBBDictByActionType(ns, 'getActionCountRemaining', "Black Operations", blackOpsNames);
     remainingBlackOpsNames = blackOpsNames.filter(n => blackOpsToBeDone[n] === 1)
         .sort((b1, b2) => blackOpsRanks[b1] - blackOpsRanks[b2]);
-    log(ns, `There are ${remainingBlackOpsNames.length} remaining BlackOps operations to complete in order:\n` +
+    const blackOpsEta = await getBlackOpsEtaSummary(ns);
+    log(ns, `There are ${remainingBlackOpsNames.length} remaining BlackOps operations to complete in order${blackOpsEta}:\n` +
         remainingBlackOpsNames.map(n => `${n} (${blackOpsRanks[n]})`).join(", "));
     maxRankNeeded = blackOpsRanks[remainingBlackOpsNames[remainingBlackOpsNames.length - 1]];
     // Check if we have the aug that lets us do bladeburner while otherwise busy
@@ -122,6 +123,47 @@ async function gatherBladeburnerInfo(ns) {
     timesTrained = 0; // Count of how many times we've trained (capped at --training-limit)
     currentTaskEndTime = 0; // When set to a date, we will not assign new tasks until that date.
     inFaction = player.factions.includes("Bladeburners"); // Whether we've joined the Bladeburner faction yet
+}
+
+async function getBlackOpsEtaSummary(ns) {
+    if (remainingBlackOpsNames.length == 0) return '';
+    const rank = await getBBInfo(ns, 'getRank()');
+    const nextBlackOp = remainingBlackOpsNames[0];
+    const finalBlackOp = remainingBlackOpsNames[remainingBlackOpsNames.length - 1];
+    const rankRate = await estimateBladeburnerRankPerMs(ns);
+    if (!Number.isFinite(rankRate) || rankRate <= 0)
+        return `. Current rank ${formatNumberShort(rank)}; ETA unavailable until a rank-gaining action is viable`;
+
+    const nextRankGap = Math.max(0, blackOpsRanks[nextBlackOp] - rank);
+    const finalRankGap = Math.max(0, blackOpsRanks[finalBlackOp] - rank);
+    const blackOpDurations = await getBBDictByActionType(ns, 'getActionTime', "Black Operations", remainingBlackOpsNames);
+    const remainingBlackOpsTime = Object.values(blackOpDurations).reduce((sum, value) => sum + (Number(value) || 0), 0);
+    return `. Current rank ${formatNumberShort(rank)}; next ETA ${formatDuration(nextRankGap / rankRate)}; final ETA ~${formatDuration(finalRankGap / rankRate + remainingBlackOpsTime)}`;
+}
+
+async function estimateBladeburnerRankPerMs(ns) {
+    const candidateActions = contractNames.concat(operationNames, ["Field Analysis"]);
+    const actionTypes = Object.fromEntries(candidateActions.map(action => [action,
+        contractNames.includes(action) ? "Contracts" :
+            operationNames.includes(action) ? "Operations" : "General"]));
+    const limitedActions = contractNames.concat(operationNames);
+    const countsByType = {
+        Contracts: await getBBDictByActionType(ns, 'getActionCountRemaining', "Contracts", contractNames),
+        Operations: await getBBDictByActionType(ns, 'getActionCountRemaining', "Operations", operationNames),
+    };
+    let bestRankPerMs = 0;
+    for (const action of candidateActions) {
+        const actionType = actionTypes[action];
+        if (limitedActions.includes(action) && (countsByType[actionType]?.[action] ?? 0) <= 0)
+            continue;
+        const rankGain = await getBBInfo(ns, `getActionRepGain(ns.args[0], ns.args[1])`, actionType, action);
+        const duration = await getBBInfo(ns, `getActionTime(ns.args[0], ns.args[1])`, actionType, action);
+        const chance = actionType == "General" ? [1, 1] :
+            await getBBInfo(ns, `getActionEstimatedSuccessChance(ns.args[0], ns.args[1])`, actionType, action);
+        const rankPerMs = (Number(rankGain) || 0) * Math.max(0, Number(chance?.[0]) || 0) / Math.max(1, Number(duration) || 0);
+        bestRankPerMs = Math.max(bestRankPerMs, rankPerMs);
+    }
+    return bestRankPerMs;
 }
 
 // Helpers to determine the the dict keys with the lowest/highest value (returns an array [key, minValue] for destructuring)
