@@ -349,8 +349,53 @@ async function ensureInfiltrationAutomationStopped(ns) {
 }
 
 function debugConsole(options, message) {
-    if (options.debug)
-        console.log(`[infiltration-runner] ${message}`);
+    if (options.debug && isDevConsoleLoggingEnabled())
+        devConsole("log", `[infiltration-runner] ${message}`);
+}
+
+function isDevConsoleLoggingEnabled() {
+    try {
+        const wnd = eval("window");
+        return isBrowserDevToolsLikelyOpen(wnd);
+    } catch {
+        return false;
+    }
+}
+
+function isBrowserDevToolsLikelyOpen(wnd) {
+    const threshold = getDevToolsGapThreshold(wnd);
+    const widthGap = Math.abs((wnd.outerWidth || 0) - (wnd.innerWidth || 0));
+    const heightGap = Math.abs((wnd.outerHeight || 0) - (wnd.innerHeight || 0));
+    return widthGap > threshold || heightGap > threshold;
+}
+
+function getDevToolsGapThreshold(wnd) {
+    const threshold = Number(wnd?.bbDevConsoleGapThreshold);
+    return Number.isFinite(threshold) && threshold >= 0 ? threshold : 800;
+}
+
+function devConsole(method, ...args) {
+    try {
+        const wnd = eval("window");
+        const consoleMethod = ["debug", "error", "info", "log", "warn"].includes(method) ? method : "log";
+        const serializedArgs = JSON.stringify(args.map(arg => typeof arg == "string" ? arg : safeDevConsoleString(arg)));
+        wnd?.eval?.(`console.${consoleMethod}(...${serializedArgs})`);
+        return;
+    } catch { }
+    try {
+        const wnd = eval("window");
+        const consoleRef = wnd?.console || globalThis.console;
+        const fn = consoleRef?.[method];
+        if (typeof fn === "function") fn.apply(consoleRef, args);
+    } catch { }
+}
+
+function safeDevConsoleString(value) {
+    try {
+        return JSON.stringify(value);
+    } catch {
+        return String(value);
+    }
 }
 
 async function clickInfiltrateCompanyButton(ns, options) {
