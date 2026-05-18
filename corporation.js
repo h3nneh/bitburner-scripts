@@ -6,7 +6,7 @@
  */
 
 import { argsSchema } from './corporation-options.js';
-import { formatMoney, formatNumberShort, getActiveSourceFiles } from './helpers.js';
+import { formatMoney, formatNumberShort, getActiveSourceFiles, getStocksValue, getFilePath } from './helpers.js';
 
 // Formatting for money and big numbers.
 const mf = (n) => formatMoney(n, 6, 2);
@@ -177,32 +177,40 @@ export function autocomplete(data, _) {
 /** @param {NS} ns **/
 export async function main(ns) {
     // Pull in any information we only need at startup.
+    const version = '2026-05-17-no-corp-exit.1';
+    ns.print(`corporation.js version ${version}`);
     options = ns.flags(argsSchema);
     verbose = options.verbose;
     dictSourceFiles = await getActiveSourceFiles(ns);
     const currentNode = ns.getResetInfo().currentNode;
+    const sf3Level = dictSourceFiles[3] || 0;
     let runOnce = options.once;
     let shouldManage = !options['price-discovery-only'];
 
     // If we haven't unlocked corporations, just give up now.
-    if (!(3 in dictSourceFiles)) {
-        ns.tprint('ERROR: You do not appear to have unlocked corporations. Exiting.');
+    if (sf3Level <= 0 && currentNode !== 3) {
+        ns.tprint(`ERROR: Corporation API is unavailable. Current BN${currentNode}, SF3.${sf3Level}. Exiting.`);
         ns.exit();
     }
 
     // See if we've already created a corporation.
-    let hasCorporation = false;
-    try {
-        myCorporation = ns.corporation.getCorporation();
-        hasCorporation = true;
-    } catch {}
+    myCorporation = tryGetCorporation(ns);
+    let hasCorporation = !!myCorporation;
+    ns.print(`Corporation startup: BN${currentNode}, SF3.${sf3Level}, hasCorporation=${hasCorporation}.`);
     // In BN3 itself, creating a seed-funded corporation grants Warehouse and Office APIs.
     // Outside BN3, we need SF3.3 for the same bootstrap path.
     if ((currentNode === 3 || dictSourceFiles[3] >= 3) && !hasCorporation) {
         await doInitialCorporateSetup(ns);
+        myCorporation = tryGetCorporation(ns);
+        hasCorporation = !!myCorporation;
+        if (!hasCorporation) {
+            ns.tprint(`ERROR: Corporation bootstrap finished but no corporation exists. ` +
+                `Current BN${currentNode}, SF3.${sf3Level}. Aborting before management loop.`);
+            ns.exit();
+        }
     } else if (dictSourceFiles[3] < 3 && !hasCorporation) {
-        ns.tprint(`Missing SF 3.3. Cannot bootstrap corporation automatically.`);
-        ns.tprint(`You must found the corporation manually, and manage it up to the point you can purchase the Office and Warehouse APIs before this script can take over.`);
+        ns.tprint(`Missing SF3.3 and no existing corporation. Current BN${currentNode}, SF3.${sf3Level}.`);
+        ns.tprint(`You must found the corporation manually, or wait until BN3/SF3.3 before this script can bootstrap it.`);
         ns.exit();
     }
 
@@ -235,6 +243,14 @@ export async function main(ns) {
         await sleepWhileNotInStartState(ns, true);
 
         if (verbose) log(ns, ``);
+    }
+}
+
+function tryGetCorporation(ns) {
+    try {
+        return ns.corporation.getCorporation();
+    } catch {
+        return null;
     }
 }
 
@@ -342,11 +358,11 @@ async function doManageCorporation(ns) {
     }
     // Figure out where we are in the fundraising progression. Don't buy a production industry until after accepting round 3.
     let offer = ns.corporation.getInvestmentOffer();
-    if (myCorporation.divisions.length > 0 && myCorporation.divisions.length < desiredDivisions && offer.round > 3) {
+    if (!options['no-expansion'] && myCorporation.divisions.length > 0 && myCorporation.divisions.length < desiredDivisions && offer.round > 3) {
         let newDivisionBudget = budget * 0.9;
         let possibleIndustries = industries.filter((ind) => ind.makesProducts);
         // Only consider industries where we can still have a budget to actually get started.
-        possibleIndustries = possibleIndustries.filter((ind) => ind.startupCost < budget * 0.5);
+        possibleIndustries = possibleIndustries.filter((ind) => ind.startupCost < newDivisionBudget);
         possibleIndustries.sort((a, b) => a.startupCost - b.startupCost).reverse();
         if (verbose && possibleIndustries.length) {
             log(ns, `We would like to expand into a new industry. Possibilities:`);
@@ -365,8 +381,9 @@ async function doManageCorporation(ns) {
         if (newIndustry) {
             tasks.push(new Task(`Add a production division, '${newIndustry.name}'`, () => doCreateNewDivision(ns, newIndustry, newDivisionBudget), newDivisionBudget, 100));
         } else {
-            log(ns, `ERROR: Buying industry failed. Aborting!`, 'error', true);
-            ns.exit();
+            const cheapestProductionIndustry = industries.filter((ind) => ind.makesProducts).sort((a, b) => a.startupCost - b.startupCost)[0];
+            log(ns, `INFO: Waiting to afford a production division. Cheapest is '${cheapestProductionIndustry.name}' ` +
+                `at ${mf(cheapestProductionIndustry.startupCost)}; expansion budget is ${mf(newDivisionBudget)}.`);
         }
     }
 
@@ -567,13 +584,42 @@ async function doInitialCorporateSetup(ns) {
     let created = false;
     try {
         created = ns.corporation.createCorporation(options['corporation-name'], false);
-    } catch {}
-    while (!created) {
-        // No public corp, so try to self fund. Wait around until we have the money, if neccessary
-        if (ns.getPlayer().money > 150e9) created = ns.corporation.createCorporation(options['corporation-name'], true);
-        if (!created) await ns.sleep(100);
+        if (created)
+            log(ns, `Founded seed-funded corporation ${options['corporation-name']}!`, 'info', true);
+    } catch (err) {
+        if (verbose) log(ns, `Seed-funded corporation creation unavailable: ${err}`);
     }
-    log(ns, `Founded corporation ${options['corporation-name']}!`, 'info', true);
+    if (!created) {
+        let playerMoney = ns.getPlayer().money;
+        let stockValue = await getStocksValue(ns);
+        if (playerMoney < 150e9 && playerMoney + stockValue >= 150e9) {
+            const pid = ns.run(getFilePath('stockmaster.js'), 1, '--liquidate');
+            if (!pid) {
+                ns.tprint(`ERROR: Could not launch stockmaster.js --liquidate to fund corporation. ` +
+                    `Need ${mf(150e9)}, cash ${mf(playerMoney)}, stocks ${mf(stockValue)}.`);
+                ns.exit();
+            }
+            log(ns, `Liquidating stocks to found self-funded corporation. Need ${mf(150e9)}, cash ${mf(playerMoney)}, stocks ${mf(stockValue)}.`, 'info', true);
+            while (ns.isRunning(pid))
+                await ns.sleep(100);
+            playerMoney = ns.getPlayer().money;
+            stockValue = await getStocksValue(ns);
+        }
+        if (playerMoney >= 150e9) {
+            created = ns.corporation.createCorporation(options['corporation-name'], true);
+            if (created)
+                log(ns, `Founded self-funded corporation ${options['corporation-name']} for ${mf(150e9)}!`, 'info', true);
+        } else {
+            ns.tprint(`No corporation exists and self-funding is not affordable. Need ${mf(150e9)}, ` +
+                `have cash ${mf(playerMoney)}, stocks ${mf(stockValue)}, net ${mf(playerMoney + stockValue)}.`);
+            ns.tprint(`Exiting to free corporation API RAM; rerun when funding is available.`);
+            ns.exit();
+        }
+    }
+    if (!created) {
+        ns.tprint(`ERROR: Failed to create corporation even though bootstrap appeared available. Exiting.`);
+        ns.exit();
+    }
 }
 
 /**
@@ -1099,15 +1145,12 @@ async function doPriceDiscovery(ns) {
         // manually, the API is busted.)
         let prevProductMultiplier = 1.0;
         for (const productName of division.products) {
-            const product = getProduct(ns, division.name, productName, getDivisionProductCity(division));
+            const productCity = getDivisionProductCity(division);
+            const product = getProduct(ns, division.name, productName, productCity);
             if (product.developmentProgress < 100) continue;
             let sPrice = `${product.desiredSellPrice}`;
             // sPrice ought to be of the form 'MP * 123.45'. If not, we should use the price of the last product we calculated.
-            let lastPriceMultiplier = prevProductMultiplier;
-            try {
-                let sMult = sPrice.split('*')[1];
-                lastPriceMultiplier = Number.parseFloat(sMult);
-            } catch {}
+            let lastPriceMultiplier = parseProductPriceMultiplier(sPrice, prevProductMultiplier);
             let votes = [];
             for (const city of division.cities) {
                 // Each city is going to "vote" for how they want the price to be manipulated.
@@ -1155,17 +1198,38 @@ async function doPriceDiscovery(ns) {
                 }
             } // end for-cities
             // All of the cities have voted. Use the lowest price that the cities have asked for.
+            votes = votes.filter((vote) => Number.isFinite(vote) && vote > 0);
+            if (votes.length == 0) {
+                log(ns, `WARNING: No valid price votes for '${productName}'. Resetting price to MP.`);
+                ns.corporation.sellProduct(division.name, productCity, productName, 'MAX', 'MP', true);
+                prevProductMultiplier = 1.0;
+                continue;
+            }
             votes.sort((a, b) => a - b);
-            let newMultiplier = votes[0];
+            let newMultiplier = Math.max(0.001, votes[0]);
             let newPrice = `MP*${newMultiplier.toFixed(3)}`;
             // if (verbose) log(ns, `${prefix}Votes: ${votes.map((n) => nf(n)).join(', ')}.`);
             let sChange = percentChange(lastPriceMultiplier, newMultiplier);
-            if (verbose) log(ns, `    Adjusting '${product.name}' price from ${sPrice} to ${newPrice} (${sChange}).`);
-            ns.corporation.sellProduct(division.name, hqCity, product.name, 'MAX', newPrice, true);
+            if (verbose) log(ns, `    Adjusting '${productName}' price from ${sPrice} to ${newPrice} (${sChange}).`);
+            try {
+                ns.corporation.sellProduct(division.name, productCity, productName, 'MAX', newPrice, true);
+            } catch (err) {
+                log(ns, `WARNING: Failed to set '${productName}' price to ${newPrice}; resetting to MP. ${err}`);
+                ns.corporation.sellProduct(division.name, productCity, productName, 'MAX', 'MP', true);
+                newMultiplier = 1.0;
+            }
             prevProductMultiplier = newMultiplier;
         } // end for-products
     } // end for-divisions
     if (verbose) log(ns, ``);
+}
+
+function parseProductPriceMultiplier(price, fallback = 1.0) {
+    if (typeof price != 'string') return fallback;
+    const match = price.match(/MP\s*\*\s*([0-9]*\.?[0-9]+)/i);
+    if (!match) return fallback;
+    const multiplier = Number.parseFloat(match[1]);
+    return Number.isFinite(multiplier) && multiplier > 0 ? multiplier : fallback;
 }
 
 /**
