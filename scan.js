@@ -53,15 +53,29 @@ export function main(ns) {
     const myHackLevel = ns.getHackingLevel();
 
     function getServerInfo(serverName) {
-        // Costs 2 GB. If you can't don't need backdoor links, uncomment and use the alternate implementations below
-        return ns.getServer(serverName)
-        // return {
-        //     requiredHackingSkill: !serverName.startsWith("daemon") && !serverName.startsWith("hacknet-server-") ? ns.getServerRequiredHackingLevel(serverName) : 0,
-        //     hasAdminRights: ns.hasRootAccess(serverName),
-        //     purchasedByPlayer: serverName.includes("daemon") || serverName.includes("hacknet"),
-        //     backdoorInstalled: true, // No way of knowing without ns.getServer
-        //     // TODO: Other things needed if showStats is true
-        // };
+        const server = ns.getServer(serverName) ?? {};
+        const purchasedByPlayer = server.purchasedByPlayer ?? (serverName === "home" || serverName.startsWith("daemon") || serverName.startsWith("hacknet-server-"));
+        const fallback = (field, getter, defaultValue = 0) => {
+            if (server[field] != null) return server[field];
+            try {
+                return getter();
+            } catch {
+                return defaultValue;
+            }
+        };
+        return {
+            ...server,
+            requiredHackingSkill: fallback("requiredHackingSkill", () => purchasedByPlayer ? 0 : ns.getServerRequiredHackingLevel(serverName)),
+            hasAdminRights: fallback("hasAdminRights", () => ns.hasRootAccess(serverName), false),
+            purchasedByPlayer,
+            backdoorInstalled: server.backdoorInstalled ?? false,
+            moneyMax: fallback("moneyMax", () => ns.getServerMaxMoney(serverName)),
+            moneyAvailable: fallback("moneyAvailable", () => ns.getServerMoneyAvailable(serverName)),
+            hackDifficulty: fallback("hackDifficulty", () => ns.getServerSecurityLevel(serverName)),
+            minDifficulty: fallback("minDifficulty", () => ns.getServerMinSecurityLevel(serverName)),
+            maxRam: fallback("maxRam", () => ns.getServerMaxRam(serverName)),
+            ramUsed: fallback("ramUsed", () => ns.getServerUsedRam(serverName)),
+        };
     }
     function createServerEntry(serverName) {
         const server = getServerInfo(serverName);

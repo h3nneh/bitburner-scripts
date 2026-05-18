@@ -13,24 +13,61 @@ export function formatMoney(num, maxSignificantFigures = 6, maxDecimalPlaces = 3
 
 export function isDevToolsOpen() {
     try {
-        // Avoid a direct "window" reference so importing helpers.js does not incur DOM RAM cost.
         const wnd = eval("window");
-        if (!wnd) return false;
-        const widthGap = Math.abs((wnd.outerWidth || 0) - (wnd.innerWidth || 0));
-        const heightGap = Math.abs((wnd.outerHeight || 0) - (wnd.innerHeight || 0));
-        return widthGap > 160 || heightGap > 160;
+        return isBrowserDevToolsLikelyOpen(wnd);
     } catch {
         return false;
     }
 }
 
+function isBrowserDevToolsLikelyOpen(wnd) {
+    const threshold = getDevToolsGapThreshold(wnd);
+    const widthGap = Math.abs((wnd.outerWidth || 0) - (wnd.innerWidth || 0));
+    const heightGap = Math.abs((wnd.outerHeight || 0) - (wnd.innerHeight || 0));
+    return widthGap > threshold || heightGap > threshold;
+}
+
+function getDevToolsGapThreshold(wnd) {
+    const threshold = Number(wnd?.bbDevConsoleGapThreshold);
+    return Number.isFinite(threshold) && threshold >= 0 ? threshold : 800;
+}
+
 export function devConsole(method, ...args) {
     if (!isDevToolsOpen()) return;
     try {
-        const consoleRef = globalThis.console;
+        if (logThroughPageConsole(method, args)) return;
+        const consoleRef = getDevConsoleRef();
         const fn = consoleRef?.[method];
-        if (typeof fn === "function") fn(...args);
+        if (typeof fn === "function") fn.apply(consoleRef, args);
     } catch { }
+}
+
+function logThroughPageConsole(method, args) {
+    try {
+        const wnd = eval("window");
+        const consoleMethod = ["debug", "error", "info", "log", "warn"].includes(method) ? method : "log";
+        const serializedArgs = JSON.stringify(args.map(arg => typeof arg == "string" ? arg : safeDevConsoleString(arg)));
+        wnd?.eval?.(`console.${consoleMethod}(...${serializedArgs})`);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function safeDevConsoleString(value) {
+    try {
+        return JSON.stringify(value);
+    } catch {
+        return String(value);
+    }
+}
+
+function getDevConsoleRef() {
+    try {
+        return eval("window")?.console || globalThis.console;
+    } catch {
+        return globalThis.console;
+    }
 }
 
 const symbols = ["", "k", "m", "b", "t", "q", "Q", "s", "S", "o", "n", "e33", "e36", "e39"];

@@ -99,8 +99,18 @@ function findAnswer(contract) {
     return codingContractSolution ? codingContractSolution.solver(JSON.parse(contract.dataJson, jsonReviver)) : null;
 }
 
+function convert2DArrayToString(arr) {
+    const components = []
+    arr.forEach(function (e) {
+        let s = e.toString()
+        s = ['[', s, ']'].join('')
+        components.push(s)
+    })
+    return components.join(',').replace(/\s/g, '')
+}
+
 // Based on https://github.com/danielyxie/bitburner/blob/master/src/data/codingcontracttypes.ts
-export const codingContractTypesMetadata = [{
+const codingContractTypesMetadata = [{
     name: 'Find Largest Prime Factor',
     solver: function (data) {
         let fac = 2
@@ -262,7 +272,7 @@ export const codingContractTypesMetadata = [{
             }
         }
         result.push([start, end])
-        return result;
+        return convert2DArrayToString(result)
     },
 },
 {
@@ -301,7 +311,7 @@ export const codingContractTypesMetadata = [{
             maxCur = Math.max(0, (maxCur += data[i] - data[i - 1]))
             maxSoFar = Math.max(maxCur, maxSoFar)
         }
-        return maxSoFar;
+        return maxSoFar.toString()
     },
 },
 {
@@ -311,7 +321,7 @@ export const codingContractTypesMetadata = [{
         for (let p = 1; p < data.length; ++p) {
             profit += Math.max(data[p] - data[p - 1], 0)
         }
-        return profit;
+        return profit.toString()
     },
 },
 {
@@ -327,7 +337,7 @@ export const codingContractTypesMetadata = [{
             release1 = Math.max(release1, hold1 + price)
             hold1 = Math.max(hold1, price * -1)
         }
-        return release2;
+        return release2.toString()
     },
 },
 {
@@ -701,7 +711,7 @@ export const codingContractTypesMetadata = [{
         while (!oddCycleFound && solution.some(e => e === undefined)) {
             traverse(solution.indexOf(undefined), 0)
         }
-        if (oddCycleFound) return [];
+        if (oddCycleFound) return "[]"; // TODO: Bug #3755 in bitburner requires a string literal. Will this be fixed?
         return solution
     },
 },
