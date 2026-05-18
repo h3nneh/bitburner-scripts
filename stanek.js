@@ -1,5 +1,5 @@
 import {
-    log, disableLogs, getFilePath, getConfiguration, formatNumberShort, formatRam,
+    log, disableLogs, getFilePath, getConfiguration, formatNumberShort, formatRam, formatDuration,
     getNsDataThroughFile, waitForProcessToComplete, getActiveSourceFiles, instanceCount, unEscapeArrayArgs,
     tail
 } from './helpers.js'
@@ -28,7 +28,7 @@ export function autocomplete(data, args) {
     return [];
 }
 
-let options, currentServer, maxCharges, idealReservedRam, chargeAttempts, sf4Level, shouldContinueForAug;
+let options, currentServer, maxCharges, idealReservedRam, chargeAttempts, sf4Level, shouldContinueForAug, progressBaselines;
 
 /** Maximizes charge on stanek fragments based on current home RAM.
  * NOTE: You should have no other scripts running on home while you do this to get the best peak charge possible
@@ -65,6 +65,7 @@ export async function main(ns) {
             log(ns, `WARNING: Stanek.js has started successfully, but failed to launch accompanying 'on-startup-script': ${startupScript}...`, false, 'warning');
     }
     chargeAttempts = {}; // We keep track of how many times we've charged each segment, to work around a placement bug where fragments can overlap, and then don't register charge
+    progressBaselines = {};
 
     const chargeScriptBody = "export async function main(ns) { await ns.stanek.chargeFragment(ns.args[0], ns.args[1]); }";
     const checkOnChargeScript = () => { // We must use this periodically since cleanup might be run while we're charging.
@@ -145,6 +146,7 @@ async function getFragmentsToCharge(ns) {
     // Collect information about each fragment's charge status, and prepare a status update
     let fragmentSummary = '';
     let minCharges = Number.MAX_SAFE_INTEGER;
+    let minRawCharges = Number.MAX_SAFE_INTEGER;
     for (const fragment of fragments) {
         fragmentSummary += `Fragment ${String(fragment.id).padStart(2)} at [${fragment.x},${fragment.y}] ` +
             (fragment.id < 100 ? `Peak: ${formatNumberShort(fragment.highestCharge)} Charges: ${fragment.numCharge.toFixed(1)}` :
@@ -154,18 +156,25 @@ async function getFragmentsToCharge(ns) {
                 log(ns, `WARNING: Detected that fragment ${fragment.id} at [${fragment.x},${fragment.y}] is not accepting charge nano (root overlaps with another segment root?)`, true, 'warning');
                 chargeAttempts[fragment.id] = 2; // Hack: We will never try to charge this fragment again. Abuse this dict value so we don't see htis log again.
             }
-        } else if (fragment.id < 100)
-            minCharges = Math.min(minCharges, fragment.numCharge) // Track the least-charged fragment (ignoring fragments that take no charge)
+        } else if (fragment.id < 100) {
+            minCharges = Math.min(minCharges, fragment.numCharge); // Track the least-charged fragment (ignoring fragments that take no charge)
+            minRawCharges = Math.min(minRawCharges, fragment.numCharge);
+        }
     }
     minCharges = Math.ceil(minCharges); // Fractional charges now occur. Round these up.
+    if (minRawCharges == Number.MAX_SAFE_INTEGER) minRawCharges = 0;
     if (minCharges >= maxCharges && !shouldContinue && fragments.some(f => (chargeAttempts[f.id] || 0) > 0))
         return []; // Max charges reached
     // We will only charge non-booster fragments, and fragments that aren't stuck at 0 charge
     const fragmentsToCharge = fragments.filter(f => f.id < 100 && ((chargeAttempts[f.id] || 0) < 2 || f.numCharge > 0));
-    // Log a status update
-    log(ns, `Charging ${fragmentsToCharge.length}/${fragments.length} fragments ` + (!shouldContinue ? `to ${maxCharges}` : `until faction has ` +
-        formatNumberShort(churchRep < awakeningRep ? awakeningRep : serenityRep) + ` rep (currently at ${formatNumberShort(churchRep)})`) +
-        `. Curent charges:\n${fragmentSummary}`);
+    // Log a status update with ETA
+    const targetRep = churchRep < awakeningRep ? awakeningRep : serenityRep;
+    const targetAug = churchRep < awakeningRep ? "Stanek's Gift - Awakening" : "Stanek's Gift - Serenity";
+    const targetStatus = !shouldContinue
+        ? formatTargetStatus('charge', minRawCharges, maxCharges, 'min charges')
+        : formatTargetStatus('rep', churchRep, targetRep, `${targetAug} rep`);
+    log(ns, `Charging ${fragmentsToCharge.length}/${fragments.length} fragments. Target: ${targetStatus}. ` +
+        `Current charges:\n${fragmentSummary}`);
     return fragmentsToCharge;
 }
 
@@ -199,4 +208,25 @@ async function tryChargeAllFragments(ns, fragmentsToCharge) {
  * @returns {Promise<ActiveFragment[]>} **/
 async function getActiveFragments(ns) {
     return await getNsDataThroughFile(ns, 'ns.stanek.activeFragments()');
+}
+
+function formatTargetStatus(key, currentValue, targetValue, unit) {
+    const eta = estimateProgressEta(key, currentValue, targetValue);
+    const current = key == 'rep' ? formatNumberShort(currentValue) : currentValue.toFixed(1);
+    const target = key == 'rep' ? formatNumberShort(targetValue) : targetValue;
+    return `${current}/${target} ${unit}, ETA ${Number.isFinite(eta) ? formatDuration(eta) : 'estimating'}`;
+}
+
+function estimateProgressEta(key, currentValue, targetValue) {
+    const now = Date.now();
+    const baseline = progressBaselines[key];
+    if (!baseline || baseline.targetValue != targetValue || currentValue < baseline.currentValue) {
+        progressBaselines[key] = { currentValue, targetValue, time: now };
+        return Number.NaN;
+    }
+    if (currentValue >= targetValue) return 0;
+    const elapsed = now - baseline.time;
+    const progress = currentValue - baseline.currentValue;
+    if (elapsed < 5000 || progress <= 0) return Number.NaN;
+    return (targetValue - currentValue) / (progress / elapsed);
 }

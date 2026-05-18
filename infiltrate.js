@@ -32,6 +32,30 @@ const speed = 22;
 const wnd = eval("window");
 const doc = wnd["document"];
 
+function isDevConsoleLoggingEnabled() {
+	return isBrowserDevToolsLikelyOpen();
+}
+
+function isBrowserDevToolsLikelyOpen() {
+	const threshold = getDevToolsGapThreshold();
+	const widthGap = Math.abs((wnd.outerWidth || 0) - (wnd.innerWidth || 0));
+	const heightGap = Math.abs((wnd.outerHeight || 0) - (wnd.innerHeight || 0));
+	return widthGap > threshold || heightGap > threshold;
+}
+
+function getDevToolsGapThreshold() {
+	const threshold = Number(wnd?.bbDevConsoleGapThreshold);
+	return Number.isFinite(threshold) && threshold >= 0 ? threshold : 800;
+}
+
+function devConsole(method, ...args) {
+	if (!isDevConsoleLoggingEnabled()) return;
+	try {
+		const fn = wnd?.console?.[method] || globalThis.console?.[method];
+		if (typeof fn === "function") fn(...args);
+	} catch { }
+}
+
 function getAutomationTimerIds() {
 	if (!Array.isArray(wnd.tmrAutoInfIds)) {
 		wnd.tmrAutoInfIds = [];
@@ -662,7 +686,7 @@ function waitForStart() {
 	wrapEventListeners();
 
 	if (!state.quiet)
-		console.log("Start automatic infiltration of", state.company);
+		devConsole("log", "Start automatic infiltration of", state.company);
 	btnStart.click();
 }
 
@@ -684,7 +708,7 @@ function playGame() {
 
 	if (bodyText.includes("Infiltration was cancelled because you were hospitalized")) {
 		if (!state.quiet)
-			console.error("Infiltration failed: hospitalized during", state.company || "unknown target");
+			devConsole("error", "Infiltration failed: hospitalized during", state.company || "unknown target");
 		endInfiltration();
 		return;
 	}
@@ -727,7 +751,7 @@ function playGame() {
 		game.play(screen);
 	} else {
 		if (!state.quiet)
-			console.error("Unknown game:", title);
+			devConsole("error", "Unknown game:", title);
 	}
 }
 
