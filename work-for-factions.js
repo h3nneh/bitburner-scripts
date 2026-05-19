@@ -955,27 +955,36 @@ async function earnFactionInvite(ns, factionName) {
                 `give heuristic ${hackHeuristic}, below threshold ${formatNumberShort(em, 2)}. ` +
                 `Background hacking/augmentations should improve this; configure with --training-stat-per-multi-threshold if desired.`);
         ns.print(`${reasonPrefix} you have insufficient hack level. Need: ${requirement}, Have: ${player.skills.hacking}`);
-        let studying = false;
-        const focusStudy = shouldFocus === undefined ? true : shouldFocus;
-        if (player.money > options['pay-for-studies-threshold']) { // If we have sufficient money, pay for the best studies
-            if (player.city != "Volhaven") await goToCity(ns, "Volhaven");
-            studying = await study(ns, focusStudy, "Algorithms");
-        } else if (uniByCity[player.city]) // Otherwise only go to free university if our city has a university
-            studying = await study(ns, focusStudy, "Computer Science");
-        else
-            return ns.print(`You have insufficient money (${formatMoney(player.money)} < --pay-for-studies-threshold ` +
-                `${formatMoney(options['pay-for-studies-threshold'])}) to travel or pay for studies, and your current ` +
-                `city ${player.city} does not have a university from which to take free computer science.`);
-        if (studying && focusStudy && !options['no-tail-windows'])
-            tail(ns);
-        if (studying)
-            workedForInvite = await monitorStudies(ns, 'hacking', requirement);
-        // If we studied for hacking, and were awaiting a backdoor, spawn the backdoor script now
-        if (workedForInvite && serverReqHackingLevel) {
-            player = await getPlayerInfo(ns);
-            if (player.skills.hacking > requirement) {
-                ns.print(`Current hacking level ${player.skills.hacking} seems to now meet the backdoor requirement ${requirement}. Spawning backdoor-all-servers.js...`);
-                ns.run(getFilePath("/Tasks/backdoor-all-servers.js"));
+        // Gang factions can be joined by creating a gang at -54K karma — no hack required.
+        // Crime for karma is faster than studying when the gang path is available and not yet unlocked.
+        if (!playerGang && allGangFactions.includes(factionName) && 2 in dictSourceFiles && -ns.heart.break() < 54000) {
+            log(ns, `INFO: "${factionName}" is a gang faction. Prioritizing crime for -54K karma ` +
+                `(${formatNumberShort(ns.heart.break())} / -54K) over studying hack from ${player.skills.hacking} to ${requirement}. ` +
+                `Will study once gang is unlocked or karma threshold is met.`);
+            workedForInvite = await crimeForKillsKarmaStats(ns, 0, 54000, 0);
+        } else {
+            let studying = false;
+            const focusStudy = shouldFocus === undefined ? true : shouldFocus;
+            if (player.money > options['pay-for-studies-threshold']) { // If we have sufficient money, pay for the best studies
+                if (player.city != "Volhaven") await goToCity(ns, "Volhaven");
+                studying = await study(ns, focusStudy, "Algorithms");
+            } else if (uniByCity[player.city]) // Otherwise only go to free university if our city has a university
+                studying = await study(ns, focusStudy, "Computer Science");
+            else
+                return ns.print(`You have insufficient money (${formatMoney(player.money)} < --pay-for-studies-threshold ` +
+                    `${formatMoney(options['pay-for-studies-threshold'])}) to travel or pay for studies, and your current ` +
+                    `city ${player.city} does not have a university from which to take free computer science.`);
+            if (studying && focusStudy && !options['no-tail-windows'])
+                tail(ns);
+            if (studying)
+                workedForInvite = await monitorStudies(ns, 'hacking', requirement);
+            // If we studied for hacking, and were awaiting a backdoor, spawn the backdoor script now
+            if (workedForInvite && serverReqHackingLevel) {
+                player = await getPlayerInfo(ns);
+                if (player.skills.hacking > requirement) {
+                    ns.print(`Current hacking level ${player.skills.hacking} seems to now meet the backdoor requirement ${requirement}. Spawning backdoor-all-servers.js...`);
+                    ns.run(getFilePath("/Tasks/backdoor-all-servers.js"));
+                }
             }
         }
     }
