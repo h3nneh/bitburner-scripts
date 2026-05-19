@@ -1,4 +1,3 @@
-// Source: https://github.com/66Ton99/bitburner-scripts/blob/main/darknet-worker.js
 const SUCCESS = 200;
 const AUTH_FAILURE = 401;
 const SERVICE_UNAVAILABLE = 503;
@@ -55,7 +54,6 @@ export async function main(ns) {
     while (true) {
         try {
             await openLocalCaches(ns);
-            // tryStasisLink(ns, String(options.origin));
             await freeLocalBlockedRam(ns);
             if (!options["disable-phishing"]) await tryPhishing(ns);
             await crawlNeighbors(ns, script, String(options.origin), interval, maxAttempts, options["verbose-terminal"]);
@@ -99,21 +97,10 @@ async function crawlNeighbors(ns, script, origin, interval, maxAttempts, verbose
     const knownPasswords = readKnownPasswords(ns);
     const neighbors = ns.dnet.probe(false).filter(server => server !== origin && server !== host);
 
-    let instability = { authenticationTimeoutChance: 0, authenticationDurationMultiplier: 1 };
-    try {
-        instability = ns.dnet.getDarknetInstability();
-    } catch {
-        // getDarknetInstability may not be available before full darknet access; ignore.
-    }
-    const highInstability = instability.authenticationTimeoutChance >= 0.5;
-    if (highInstability) ns.print(`INFO: Darknet instability high (timeout chance ${Math.round(instability.authenticationTimeoutChance * 100)}%). Skipping auth attempts this cycle.`);
-
-    let migratedOneThisCycle = false;
-
     for (const target of neighbors) {
         let details;
         try {
-            details = ns.dnet.getServerAuthDetails(target);
+            details = getDarknetServerDetails(ns, target);
         } catch (error) {
             ns.print(`WARN: Cannot inspect ${target}: ${formatError(error)}`);
             continue;
@@ -127,26 +114,47 @@ async function crawlNeighbors(ns, script, origin, interval, maxAttempts, verbose
         }
 
         if (password == null) {
-            password = await solveAndAuthenticate(ns, target, details, maxAttempts, verboseTerminal, highInstability);
+            password = await solveAndAuthenticate(ns, target, details, maxAttempts, verboseTerminal);
             if (password == null) continue;
             knownPasswords[target] = password;
             writeKnownPasswords(ns, knownPasswords);
         }
 
         await spreadToNeighbor(ns, script, target, password, interval, verboseTerminal);
-
-        if (!migratedOneThisCycle && !highInstability && !details.isStationary) {
-            await tryInduceMigration(ns, target);
-            migratedOneThisCycle = true;
-        }
     }
 }
 
-async function solveAndAuthenticate(ns, target, details, maxAttempts, verboseTerminal, skipAuthAttempts = false) {
-    if (skipAuthAttempts) {
-        ns.print(`INFO: Skipping auth attempts for ${target} (high instability).`);
-        return null;
-    }
+function getDarknetServerDetails(ns, target) {
+    let details;
+    if (typeof ns.dnet.getServerDetails === "function") details = ns.dnet.getServerDetails(target);
+    else if (typeof ns.dnet.getServer === "function") details = ns.dnet.getServer(target);
+    else if (typeof ns.dnet.getServerAuthDetails === "function") details = ns.dnet.getServerAuthDetails(target);
+    else throw new Error("No compatible dnet server details API is available.");
+    return normalizeDarknetServerDetails(details);
+}
+
+function normalizeDarknetServerDetails(details) {
+    if (details == null || typeof details !== "object") throw new Error(`Invalid dnet server details: ${details}`);
+    return {
+        ...details,
+        blockedRam: details.blockedRam ?? 0,
+        depth: details.depth ?? -1,
+        difficulty: details.difficulty ?? 0,
+        hasSession: details.hasSession ?? false,
+        isConnectedToCurrentServer: details.isConnectedToCurrentServer ?? false,
+        isOnline: details.isOnline ?? true,
+        isStationary: details.isStationary ?? false,
+        logTrafficInterval: details.logTrafficInterval ?? 0,
+        modelId: details.modelId ?? "",
+        data: details.data ?? "",
+        passwordFormat: details.passwordFormat ?? "ASCII",
+        passwordHint: details.passwordHint ?? "",
+        passwordLength: details.passwordLength ?? 0,
+        requiredCharismaSkill: details.requiredCharismaSkill ?? 0,
+    };
+}
+
+async function solveAndAuthenticate(ns, target, details, maxAttempts, verboseTerminal) {
     const candidates = buildCandidates(details).slice(0, maxAttempts);
     if (candidates.length === 0) {
         ns.print(`INFO: No solver yet for ${target} model=${details.modelId}`);
@@ -403,40 +411,6 @@ function unique(values) {
 function terminalLog(ns, verboseTerminal, message) {
     if (verboseTerminal) ns.tprint(message);
     else ns.print(message);
-}
-
-// let stasisLinkInFlight = false;
-
-// function tryStasisLink(ns, origin) {
-//     const host = ns.getHostname();
-//     if (host === "darkweb" || host === origin) return;
-//     if (ns.getServerMaxRam(host) < 256) return;
-//     if (stasisLinkInFlight) return;
-//     try {
-//         const linked = ns.dnet.getStasisLinkedServers();
-//         if (linked.includes(host)) return;
-//         stasisLinkInFlight = true;
-//         ns.dnet.setStasisLink(true).then(result => {
-//             stasisLinkInFlight = false;
-//             if (result.success) ns.print(`SUCCESS: Stasis-linked ${host}.`);
-//             else ns.print(`INFO: Stasis link on ${host} failed: ${result.message}`);
-//         }).catch(err => {
-//             stasisLinkInFlight = false;
-//             ns.print(`WARN: Stasis link error on ${host}: ${formatError(err)}`);
-//         });
-//     } catch (err) {
-//         ns.print(`WARN: Could not initiate stasis link on ${host}: ${formatError(err)}`);
-//     }
-// }
-
-async function tryInduceMigration(ns, target) {
-    try {
-        const result = await ns.dnet.induceServerMigration(target);
-        if (result.success) ns.print(`INFO: Charged migration on ${target}.`);
-        else ns.print(`INFO: Migration charge on ${target} failed: ${result.message}`);
-    } catch (err) {
-        ns.print(`WARN: induceServerMigration error on ${target}: ${formatError(err)}`);
-    }
 }
 
 function formatError(error) {

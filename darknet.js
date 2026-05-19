@@ -1,4 +1,3 @@
-// Source: https://github.com/66Ton99/bitburner-scripts/blob/main/darknet.js
 /** @param {NS} ns */
 export async function main(ns) {
     const options = ns.flags([
