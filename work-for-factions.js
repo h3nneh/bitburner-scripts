@@ -956,13 +956,32 @@ async function earnFactionInvite(ns, factionName) {
                 `Background hacking/augmentations should improve this; configure with --training-stat-per-multi-threshold if desired.`);
         ns.print(`${reasonPrefix} you have insufficient hack level. Need: ${requirement}, Have: ${player.skills.hacking}`);
         // Gang factions can be joined by creating a gang at -54K karma — no hack required.
-        // Crime for karma is faster than studying when the gang path is available and not yet unlocked.
-        if (!playerGang && allGangFactions.includes(factionName) && 2 in dictSourceFiles && -ns.heart.break() < 54000) {
-            log(ns, `INFO: "${factionName}" is a gang faction. Prioritizing crime for -54K karma ` +
-                `(${formatNumberShort(ns.heart.break())} / -54K) over studying hack from ${player.skills.hacking} to ${requirement}. ` +
-                `Will study once gang is unlocked or karma threshold is met.`);
-            workedForInvite = await crimeForKillsKarmaStats(ns, 0, 54000, 0);
-        } else {
+        // Compare crime-for-karma ETA vs study-for-hack ETA to pick the faster path.
+        const karmaNeeded = 54000 + ns.heart.break(); // ns.heart.break() is negative
+        let useCrimeForGangKarma = false;
+        if (!playerGang && allGangFactions.includes(factionName) && 2 in dictSourceFiles && karmaNeeded > 0) {
+            const levelsNeeded = requirement - player.skills.hacking;
+            const avgHackLevel = (player.skills.hacking + requirement) / 2;
+            // XP per hack level grows ~quadratically at level 300+; calibrated from observed rates
+            const approxXpPerLevel = avgHackLevel * avgHackLevel / 6;
+            const baseStudyExpPerSec = player.money > options['pay-for-studies-threshold'] ? 6 : 4;
+            const studyExpPerSec = baseStudyExpPerSec * player.mults.hacking_exp * (bitNodeMults.ClassGymExpGain ?? 1);
+            const studyEtaSec = levelsNeeded * approxXpPerLevel / studyExpPerSec;
+            // Homicide: ~3 karma per 3.2s base, scaled by crime_success and BN mult
+            const karmaPerSec = (3 / 3.2) * player.mults.crime_success * (bitNodeMults.CrimeSuccessRate ?? 1);
+            const crimeKarmaEtaSec = karmaNeeded / karmaPerSec;
+            if (crimeKarmaEtaSec < studyEtaSec) {
+                log(ns, `INFO: "${factionName}" is a gang faction. Crime to -54K karma faster ` +
+                    `(~${formatDuration(crimeKarmaEtaSec * 1000)} vs ~${formatDuration(studyEtaSec * 1000)} to study). ` +
+                    `Prioritizing crime (${formatNumberShort(ns.heart.break())} / -54K karma).`);
+                workedForInvite = await crimeForKillsKarmaStats(ns, 0, 54000, 0);
+                useCrimeForGangKarma = true;
+            } else {
+                ns.print(`INFO: Studying hack is faster (~${formatDuration(studyEtaSec * 1000)}) than crime for karma ` +
+                    `(~${formatDuration(crimeKarmaEtaSec * 1000)}). Proceeding with study.`);
+            }
+        }
+        if (!useCrimeForGangKarma) {
             let studying = false;
             const focusStudy = shouldFocus === undefined ? true : shouldFocus;
             if (player.money > options['pay-for-studies-threshold']) { // If we have sufficient money, pay for the best studies
