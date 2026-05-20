@@ -549,6 +549,16 @@ async function mainLoop(ns) {
                 log(ns, `INFO: We are nearing the Karma required to unlock gangs (${formatNumberShort(ns.heart.break())} / -54K). Prioritize earning gang faction invites.`);
                 for (const factionName of desiredGangFactions)
                     await earnFactionInvite(ns, factionName);
+                if (ns.heart.break() <= -54000) { // Karma threshold met — try to create a gang now
+                    for (const factionName of desiredGangFactions) {
+                        try {
+                            if (await getNsDataThroughFile(ns, `ns.gang.createGang(ns.args[0])`, '/Temp/wff-createGang.js', [factionName])) {
+                                log(ns, `SUCCESS: Created gang with faction "${factionName}"`, true, 'success');
+                                break;
+                            }
+                        } catch { /* faction not yet invited */ }
+                    }
+                }
             }
         }
     }
