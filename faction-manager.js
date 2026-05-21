@@ -1555,13 +1555,16 @@ async function managePurchaseableAugs(ns, outputRows, accessibleAugs) {
     // NEXT STEP: Add as many NeuroFlux levels to our purchase as we can (unless disabled)
     if (options['neuroflux-disabled']) return;
     const remainingConcreteTargets = getConcreteTargetAugsNotInPurchaseOrder();
+    // Only defer NF for targets we can actually buy right now (affordable or donatable).
+    // Unaffordable targets should not block NF — the budget loop already prevents overspending.
+    const remainingAffordableConcreteTargets = remainingConcreteTargets.filter(aug => aug.canAfford() || aug.canAffordWithDonation());
     const bn3FirstInstall = isBn3FirstAugReset() && installedAugmentations.filter(a => a != strNF).length == 0;
     const bn3FirstInstallNeedsNfFallback = bn3FirstInstall && !purchaseableAugs.some(aug => aug.name != strNF);
-    if (remainingConcreteTargets.length > 0 && !bn3FirstInstallNeedsNfFallback) {
-        outputRows.push(`INFO: Not buying ${strNF} yet. ${remainingConcreteTargets.length} concrete target augmentation(s) remain, ` +
-            `so ${strNF} is reserved for leftover cash after goals are complete: ` +
-            remainingConcreteTargets.slice(0, 8).map(aug => `"${aug.name}"`).join(", ") +
-            (remainingConcreteTargets.length > 8 ? `, ...` : ''));
+    if (remainingAffordableConcreteTargets.length > 0 && !bn3FirstInstallNeedsNfFallback) {
+        outputRows.push(`INFO: Not buying ${strNF} yet. ${remainingAffordableConcreteTargets.length} affordable concrete target(s) remain ` +
+            `(${remainingConcreteTargets.length} total unowned), so ${strNF} is reserved for leftover cash: ` +
+            remainingAffordableConcreteTargets.slice(0, 8).map(aug => `"${aug.name}"`).join(", ") +
+            (remainingAffordableConcreteTargets.length > 8 ? `, ...` : ''));
         if (nextUpAug) outputRows.push(nextUpAug);
         return;
     } else if (bn3FirstInstallNeedsNfFallback && remainingConcreteTargets.length > 0) {
