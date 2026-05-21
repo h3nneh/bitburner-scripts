@@ -74,8 +74,11 @@ function getReqDonationForRep(repNeeded, factionOrFactionName) {
 }
 
 function shouldAllowDonationForAug(aug) {
-    return aug?.name == augTRP && !ownedAugmentations.includes(augTRP) &&
-        !shouldDeferBn3TrpForDaedalusBatch();
+    if (!aug?.name || ownedAugmentations.includes(aug.name)) return false;
+    if (aug.name == augTRP && !shouldDeferBn3TrpForDaedalusBatch()) return true;
+    // In BN10 money is the bottleneck; allow donations for any desired aug when we have high favor
+    if (bitNode == 10 && aug.desired) return true;
+    return false;
 }
 
 function getAugName(augOrName) {
@@ -137,10 +140,9 @@ async function shouldDisableNeuroFluxForBn10Sleeves(ns, ownedSourceFiles) {
     try {
         const targetSleeveCount = Math.min(8, 6 + (ownedSourceFiles[10] || 0));
         const numSleeves = await getNsDataThroughFile(ns, `ns.sleeve.getNumSleeves()`);
-        if (numSleeves < targetSleeveCount) return true;
-        const sleeveInfo = await getNsDataThroughFile(ns, `ns.args.map(i => ns.sleeve.getSleeve(i))`,
-            '/Temp/facman-sleeve-getSleeve-all.txt', [...Array(numSleeves).keys()]);
-        return sleeveInfo.some(sleeve => sleeve.memory < 100);
+        // Only block NF when sleeves are still missing (very expensive). Memory upgrades cost far
+        // less and are already protected by reserve.txt, so NF can safely run then.
+        return numSleeves < targetSleeveCount;
     } catch {
         return false;
     }
@@ -738,13 +740,37 @@ async function manageAutomatedAugmentations(ns, resetInfo, ownedSourceFiles, sf1
         return { status: `BN3 --money-focus is active. Not buying or installing augmentations while money-focus is enabled.` };
     }
     if (options['bn10-sleeves-incomplete']) {
-        state.reservedPurchase = 0;
-        state.installCountdown = 0;
-        writeInstallState(ns, state);
-        return {
-            status: `Not buying or installing augmentations because BN10 is complete and Covenant sleeves/memory are still missing. ` +
-                `Reserving ${formatMoney(options['bn10-sleeve-reserve'])} for the next sleeve purchase.`
-        };
+        const sleeveReserve = options['bn10-sleeve-reserve'] || 0;
+        // Decide: save for sleeve (no install), or allow installs to boost income multipliers.
+        // Heuristic: if sleeve is achievable within 3h at current gang income → save.
+        // If farther away, an aug-reset now pays off (better multipliers → higher gang income → sleeve sooner).
+        let sleeveAchievableSoon = !sleeveReserve;
+        if (sleeveReserve > 0) {
+            const gangInfo = await getGangInfo(ns);
+            const incomePerSec = gangInfo?.moneyGainRate || 0;
+            const shortfall = Math.max(0, sleeveReserve - playerData.money - stockValue);
+            const secondsToSleeve = shortfall <= 0 ? 0 : (incomePerSec > 0 ? shortfall / incomePerSec : Infinity);
+            const thresholdSec = 90 * 60; // 90min: beyond this, installs beat passive saving
+            sleeveAchievableSoon = secondsToSleeve < thresholdSec;
+            const etaStr = Number.isFinite(secondsToSleeve) ? formatDuration(secondsToSleeve * 1000) : "∞";
+            const decision = sleeveAchievableSoon ? "saving for sleeve (< 90min away)" : "allowing aug-reset to boost income multipliers (≥ 90min away)";
+            log(ns, `INFO: BN10 next sleeve/memory: shortfall ${formatMoney(shortfall)}, gang income ${formatMoney(incomePerSec)}/s, ` +
+                `ETA ${etaStr} → ${decision}.`, printToTerminal, 'info');
+        }
+        if (sleeveAchievableSoon) {
+            state.reservedPurchase = 0;
+            state.installCountdown = 0;
+            writeInstallState(ns, state);
+            // Buy NF/augs with excess money above the sleeve reserve but do NOT install.
+            // purchaseDesiredAugs respects reserve.txt (set by autopilot to sleeveReserve).
+            await purchaseDesiredAugs(ns);
+            await refreshOwnedAfterAutomatedPurchase(ns);
+            return {
+                status: `BN10 sleeves/memory incomplete: sleeve < 90min away. ` +
+                    `Buying augs/NF with excess cash only; reserving ${formatMoney(sleeveReserve)} for sleeve/memory.`
+            };
+        }
+        // Sleeve is ≥ 90min away — fall through to normal install path so aug-reset boosts income multipliers.
     }
 
     const bn3FirstInstall = isBn3FirstAugReset(resetInfo) && installedAugmentations.filter(a => a != strNF).length == 0;
@@ -1358,7 +1384,7 @@ async function manageUnownedAugmentations(ns, ignoredAugs) {
         await manageFilteredSubset(ns, outputRows, 'Unavailable', unavailableAugs, true, false);
     // Prepare and display a little legend of what symbols in our augmentation list mean
     const legendTitle = 'Optimized Purchase Order Legend';
-    outputRows.push(legendTitle, '-'.repeat(legendTitle.length), "✓  Can afford", "$  Can donate for Red Pill rep", "✗  Cannot afford",
+    outputRows.push(legendTitle, '-'.repeat(legendTitle.length), "✓  Can afford", "$  Can donate for required reputation", "✗  Cannot afford",
         `*  Desired aug/stats (${desiredStatsFilters.join(", ")})`, '-'.repeat(legendTitle.length));
     const countAvailable = availableAugs?.length || 0; // Get a count of available augs (including NF) to determine whether to prepare a purchase order
     // Display available augs. We use the return value to "lock in" the new sort order. If enabled, subsequent tables are displayed if the filtered sort order changes.
@@ -1696,7 +1722,7 @@ async function purchaseDesiredAugs(ns) {
             'JSON.parse(ns.args[0]).reduce((success, o) => success && ns.singularity.donateToFaction(o.faction, o.amount), true)',
             '/Temp/facman-donate.txt', [JSON.stringify(donations)]);
         if (donated) {
-            log(ns, `SUCCESS: Donated to ${donations.length} faction(s) to unlock ${augTRP} reputation.`, printToTerminal, 'success');
+            log(ns, `SUCCESS: Donated to ${donations.length} faction(s) to unlock augmentation reputation.`, printToTerminal, 'success');
             await updateFactionData(ns, options['ignore-faction'].map(f => f.replaceAll("_", " ")));
         } else {
             await restoreExternalReserve();
