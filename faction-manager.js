@@ -140,9 +140,18 @@ async function shouldDisableNeuroFluxForBn10Sleeves(ns, ownedSourceFiles) {
     try {
         const targetSleeveCount = Math.min(8, 6 + (ownedSourceFiles[10] || 0));
         const numSleeves = await getNsDataThroughFile(ns, `ns.sleeve.getNumSleeves()`);
-        // Only block NF when sleeves are still missing (very expensive). Memory upgrades cost far
-        // less and are already protected by reserve.txt, so NF can safely run then.
-        return numSleeves < targetSleeveCount;
+        // All sleeves present: memory upgrades are cheap and reserve.txt already protects them.
+        if (numSleeves >= targetSleeveCount) return false;
+        // Missing sleeves: only block NF if the next sleeve is achievable within 90min.
+        // Beyond that, NF compounding beats passive cash accumulation toward the sleeve.
+        const sleeveReserve = options?.['bn10-sleeve-reserve'] || 0;
+        if (!sleeveReserve) return false;
+        const gangInfo = await getGangInfo(ns);
+        const incomePerSec = gangInfo?.moneyGainRate || 0;
+        const shortfall = Math.max(0, sleeveReserve - (playerData?.money || 0) - stockValue);
+        if (shortfall <= 0) return false;
+        if (incomePerSec <= 0) return true;
+        return shortfall / incomePerSec < 90 * 60;
     } catch {
         return false;
     }
