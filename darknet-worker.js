@@ -2,6 +2,7 @@ const SUCCESS = 200;
 const AUTH_FAILURE = 401;
 const SERVICE_UNAVAILABLE = 503;
 const STATE_FILE = "/Temp/darknet-passwords.txt";
+const STASIS_FILE = "stasis.js";
 
 const COMMON_PASSWORDS = [
     "123456", "password", "12345678", "qwerty", "123456789", "12345", "1234", "111111", "1234567",
@@ -107,6 +108,8 @@ async function crawlNeighbors(ns, script, origin, interval, maxAttempts, verbose
         }
         if (!details.isOnline) continue;
 
+        if (details.modelId === "(The Labyrinth)") await tryStasis(ns);
+
         let password = knownPasswords[target];
         if (password != null) {
             const session = ns.dnet.connectToSession(target, password);
@@ -179,6 +182,7 @@ async function spreadToNeighbor(ns, script, target, password, interval, verboseT
         const session = ns.dnet.connectToSession(target, password);
         if (!session.success) return;
         await ns.scp(script, target, ns.getHostname());
+        if (ns.fileExists(STASIS_FILE, ns.getHostname())) await ns.scp(STASIS_FILE, target, ns.getHostname());
         if (ns.fileExists(STATE_FILE, ns.getHostname())) await ns.scp(STATE_FILE, target, ns.getHostname());
         const args = ["--origin", ns.getHostname(), "--interval", interval];
         if (verboseTerminal) args.push("--verbose-terminal");
@@ -207,6 +211,8 @@ function buildCandidates(details) {
     if (model === "OctantVoxel") return [String(Math.round(parseBaseN(data)))];
     if (model === "MathML") return [String(parseArithmeticExpression(data))];
     if (model === "Pr0verFl0") return ["A".repeat(Math.max(1, details.passwordLength * 2))];
+    if (model === "PHP 5.4") return permute(data.replace(/\D/g, ""));
+    if (model === "AccountsManager_4.2") return solveAccountsManager(details.passwordLength);
     return [];
 }
 
@@ -233,6 +239,8 @@ function runSelfTest() {
         ["OctantVoxel", { modelId: "OctantVoxel", data: "16,2A" }, ["42"]],
         ["MathML", { modelId: "MathML", data: "6 * (7 + 1)" }, ["48"]],
         ["Pr0verFl0", { modelId: "Pr0verFl0", passwordLength: 4 }, ["AAAAAAAA"]],
+        ["PHP 5.4", { modelId: "PHP 5.4", data: "12" }, ["12", "21"]],
+        ["AccountsManager_4.2", { modelId: "AccountsManager_4.2", passwordLength: 2 }, ["00", "01", "02"]],
     ];
     const failures = [];
     for (const [name, details, expectedPrefix] of tests) {
@@ -246,6 +254,21 @@ function runSelfTest() {
 
 function lastHintToken(hint) {
     return hint.trim().split(/\s+/).at(-1) ?? "";
+}
+
+function permute(str) {
+    if (str.length <= 1) return [str];
+    const result = [];
+    for (let i = 0; i < str.length; i++) {
+        const remaining = str.slice(0, i) + str.slice(i + 1);
+        for (const perm of permute(remaining)) result.push(str[i] + perm);
+    }
+    return result;
+}
+
+function solveAccountsManager(passwordLength) {
+    const count = 10 ** passwordLength;
+    return Array.from({ length: count }, (_, i) => String(i).padStart(passwordLength, "0"));
 }
 
 function solveRoman(data) {
@@ -346,6 +369,20 @@ function parseExpression(input) {
         return value;
     };
     return parseAddSub();
+}
+
+async function tryStasis(ns) {
+    const host = ns.getHostname();
+    const freeRam = ns.getServerMaxRam(host) - ns.getServerUsedRam(host);
+    if (freeRam < ns.getScriptRam(STASIS_FILE, host)) {
+        ns.print("WARN: Not enough RAM for stasis.");
+        return;
+    }
+    try {
+        ns.exec(STASIS_FILE, host, { threads: 1, preventDuplicates: true }, true);
+    } catch (error) {
+        ns.print(`WARN: Cannot start stasis: ${formatError(error)}`);
+    }
 }
 
 async function openLocalCaches(ns) {

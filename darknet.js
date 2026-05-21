@@ -2,6 +2,7 @@
 export async function main(ns) {
     const options = ns.flags([
         ["worker", "darknet-worker.js"],
+        ["stasis", "stasis.js"],
         ["interval", 30000],
         ["no-tail-windows", false],
         ["verbose-terminal", false],
@@ -28,6 +29,7 @@ export async function main(ns) {
     }
 
     const worker = String(options.worker);
+    const stasis = String(options.stasis);
     const interval = Math.max(1000, Number(options.interval) || 30000);
     const darkweb = "darkweb";
 
@@ -46,6 +48,7 @@ export async function main(ns) {
             }
 
             await ns.scp(worker, darkweb, "home");
+            if (ns.fileExists(stasis, "home")) await ns.scp(stasis, darkweb, "home");
             const workerArgs = ["--origin", "home"];
             if (options["verbose-terminal"]) workerArgs.push("--verbose-terminal");
             const pid = ns.exec(worker, darkweb, { threads: 1, preventDuplicates: true }, ...workerArgs);
