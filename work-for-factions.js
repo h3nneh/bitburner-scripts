@@ -2733,7 +2733,7 @@ async function detectBestFactionWork(ns, factionName, favor = 0) {
         if (hasFormulas) {
             await stop(ns);
             const gains = await getFormulasWorkFactionGains(ns, work, favor);
-            rate = gains?.reputation ?? 0;
+            rate = (gains?.reputation ?? 0) * 5; // factionGains returns per-tick (200ms); convert to per-second
         } else {
             await ns.sleep(500); // wait ≥2 game ticks so the new work type accumulates rep before sampling
             rate = await measureFactionRepGainRate(ns, factionName);
