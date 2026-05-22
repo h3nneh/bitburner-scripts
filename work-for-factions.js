@@ -5,7 +5,7 @@ import {
 } from './helpers.js'
 
 let options;
-const workForFactionsVersion = "2026-05-13-bn3-grafting-background.1";
+const workForFactionsVersion = "2026-05-22-fix-work-type-selection.1";
 const argsSchema = [
     ['first', []], // Grind rep with these factions first. Also forces a join of this faction if we normally wouldn't (e.g. no desired augs or all augs owned)
     ['skip', []], // Don't work for these factions
@@ -1850,9 +1850,10 @@ export async function workForSingleFaction(ns, factionName, forceThroughInvitePr
         const infiltrationRepPerSec = bestInfiltrationForComparison
             ? (bestInfiltrationForComparison.reward?.tradeRep || 0) / (estimateInfiltrationRunTimeMs(bestInfiltrationForComparison) / 1000)
             : 0;
-        // Measure direct work rep rate (tries each work type, ~200ms each)
+        // Measure direct work rep rate (tries each work type; sleep lets the game process the switch before sampling)
         for (const work of Object.values(ns.enums.FactionWorkType)) {
             if (!(await startWorkForFaction(ns, factionName, work, shouldFocus))) continue;
+            await ns.sleep(500); // Wait for at least 2 game ticks so the new work type accumulates rep before we sample
             const rate = await measureFactionRepGainRate(ns, factionName);
             if (rate > bestDirectRepRate) { bestDirectRepRate = rate; bestDirectWorkType = work; }
         }
@@ -2694,9 +2695,9 @@ async function measureRepGainRate(ns, fnSampleReputation) {
     const initialReputation = await fnSampleReputation();
     let nextTickReputation;
     let start = Date.now();
-    while (initialReputation == (nextTickReputation = await fnSampleReputation()) && Date.now() - start < 450)
+    while (initialReputation == (nextTickReputation = await fnSampleReputation()) && Date.now() - start < 5000)
         await ns.sleep(50);
-    return (nextTickReputation - initialReputation) * 5; // Assume this rep gain was for a 200 tick
+    return (nextTickReputation - initialReputation) * 5; // Assume this rep gain was for a 200ms tick
 }
 /** Measure our faction rep gain rate (per second)
  * @param {NS} ns */
@@ -2720,6 +2721,7 @@ async function detectBestFactionWork(ns, factionName) {
             //ns.print(`"${factionName}": "${work}"" work not supported.`);
             continue; // This type of faction work must not be supported
         }
+        await ns.sleep(500); // Wait for at least 2 game ticks so the new work type accumulates rep before we sample
         const currentRepGainRate = await measureFactionRepGainRate(ns, factionName);
 
         //ns.print(`"${factionName}" work ${work} provides ${formatNumberShort(currentRepGainRate)} rep rate`);
