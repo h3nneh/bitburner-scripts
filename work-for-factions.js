@@ -5,7 +5,7 @@ import {
 } from './helpers.js'
 
 let options;
-const workForFactionsVersion = "2026-05-22-fix-work-type-selection.1";
+const workForFactionsVersion = "2026-05-22-fix-work-type-selection.2";
 const argsSchema = [
     ['first', []], // Grind rep with these factions first. Also forces a join of this faction if we normally wouldn't (e.g. no desired augs or all augs owned)
     ['skip', []], // Don't work for these factions
@@ -1850,13 +1850,10 @@ export async function workForSingleFaction(ns, factionName, forceThroughInvitePr
         const infiltrationRepPerSec = bestInfiltrationForComparison
             ? (bestInfiltrationForComparison.reward?.tradeRep || 0) / (estimateInfiltrationRunTimeMs(bestInfiltrationForComparison) / 1000)
             : 0;
-        // Measure direct work rep rate (tries each work type; sleep lets the game process the switch before sampling)
-        for (const work of Object.values(ns.enums.FactionWorkType)) {
-            if (!(await startWorkForFaction(ns, factionName, work, shouldFocus))) continue;
-            await ns.sleep(500); // Wait for at least 2 game ticks so the new work type accumulates rep before we sample
-            const rate = await measureFactionRepGainRate(ns, factionName);
-            if (rate > bestDirectRepRate) { bestDirectRepRate = rate; bestDirectWorkType = work; }
-        }
+        // Determine best work type: exact via Formulas.exe (SF5) if available, else empirical measurement
+        const bestWork = await detectBestFactionWork(ns, factionName, startingFavor);
+        bestDirectWorkType = bestWork.bestWork;
+        bestDirectRepRate = bestWork.bestRepRate;
         if (bestDirectWorkType && bestDirectRepRate > infiltrationRepPerSec) {
             useDirectWork = true;
             ns.print(`INFO: Direct faction work (${bestDirectWorkType}: ${formatNumberShort(bestDirectRepRate)} rep/s) beats infiltration (${formatNumberShort(infiltrationRepPerSec)} rep/s) for "${factionName}". Using direct work.`);
@@ -2710,31 +2707,38 @@ async function measureCompanyRepGainRate(ns, companyName) {
     return await measureRepGainRate(ns, async () => await getCompanyReputation(ns, companyName));
 }
 
-/** Try all work types and see what gives the best rep gain with this faction!
+/** Select the best faction work type.
+ * Uses ns.formulas.work.factionGains (Formulas.exe / SF5) for an exact calculation when available;
+ * falls back to empirical measurement otherwise.
  * @param {NS} ns
  * @param {string} factionName The name of the faction to work for
- * @returns {Promise<FactionWorkType>} The faction work type measured to give the best reputation gain rate */
-async function detectBestFactionWork(ns, factionName) {
-    let bestWork, bestRepRate = 0;
+ * @param {number} favor Current favor with this faction (used for Formulas calc)
+ * @returns {Promise<{bestWork: string, bestRepRate: number}>} */
+async function detectBestFactionWork(ns, factionName, favor = 0) {
+    const hasFormulas = ns.fileExists('Formulas.exe', 'home');
+    let bestWork = undefined, bestRepRate = 0;
     for (const work of Object.values(ns.enums.FactionWorkType)) {
-        if (!(await startWorkForFaction(ns, factionName, work, shouldFocus))) {
-            //ns.print(`"${factionName}": "${work}"" work not supported.`);
-            continue; // This type of faction work must not be supported
+        // start work to confirm this type is supported; pass focus=false in Formulas path (we stop immediately after)
+        if (!(await startWorkForFaction(ns, factionName, work, hasFormulas ? false : shouldFocus)))
+            continue;
+        let rate;
+        if (hasFormulas) {
+            await stop(ns);
+            const gains = await getNsDataThroughFile(ns,
+                `ns.formulas.work.factionGains(ns.getPlayer(), ns.args[0], ns.args[1])`,
+                '/Temp/wff-factionGains.txt', [work, favor]);
+            rate = gains?.reputation ?? 0;
+        } else {
+            await ns.sleep(500); // wait ≥2 game ticks so the new work type accumulates rep before sampling
+            rate = await measureFactionRepGainRate(ns, factionName);
         }
-        await ns.sleep(500); // Wait for at least 2 game ticks so the new work type accumulates rep before we sample
-        const currentRepGainRate = await measureFactionRepGainRate(ns, factionName);
-
-        //ns.print(`"${factionName}" work ${work} provides ${formatNumberShort(currentRepGainRate)} rep rate`);
-        if (currentRepGainRate > bestRepRate) {
-            bestRepRate = currentRepGainRate;
-            bestWork = work;
-        }
+        if (rate > bestRepRate) { bestRepRate = rate; bestWork = work; }
     }
     if (bestWork === undefined) {
-        mainLoopStart = 0; // Force break out of whatever work loop we're in to update info (maybe we formed a gang with the faction we were working for?)
+        mainLoopStart = 0; // force break to update info (maybe we formed a gang with this faction?)
         throw Error(`The faction "${factionName}" does not support any of the known work types. Cannot work for this faction!`);
     }
-    return bestWork;
+    return { bestWork, bestRepRate };
 }
 
 /** @param {NS} ns
