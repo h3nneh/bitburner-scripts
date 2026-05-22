@@ -6,6 +6,7 @@ const argsSchema = [
     ['low-money-max-infiltration-difficulty', 2.5],
     ['travel-buffer', 200000],
     ['result-file', '/Temp/money-infiltration-result.txt'],
+    ['min-payout', 5e6], // Skip infiltrations paying less than this; avoids wasting time on trivial targets with low combat stats
 ];
 
 const cityTravelCost = 200000;
@@ -63,7 +64,7 @@ function pickBestCashInfiltration(ns, player, options) {
             try { return ns.infiltration.getInfiltration(location.name); }
             catch { return null; }
         })
-        .filter(infiltration => infiltration?.location && (infiltration.reward?.sellCash || 0) > 0)
+        .filter(infiltration => infiltration?.location && (infiltration.reward?.sellCash || 0) >= options['min-payout'])
         .filter(infiltration => canReach(infiltration, player, options))
         .filter(infiltration => canHandleDifficulty(infiltration, player, getDifficultyCap(infiltration, player, options)));
     return details.sort((a, b) =>

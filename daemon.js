@@ -542,7 +542,7 @@ export async function main(ns) {
             try {
                 const hasCorp = await getNsDataThroughFile(ns, 'ns.corporation.hasCorporation()');
                 corporationLaunchGateStatus = hasCorp ? 'running'
-                    : getPlayerMoney(ns) >= corporationSelfFundingCost ? 'ready' : 'waiting';
+                    : (bitNodeN == 3 || getPlayerMoney(ns) >= corporationSelfFundingCost) ? 'ready' : 'waiting';
             } catch {
                 corporationLaunchGateStatus = 'error';
             }
@@ -637,6 +637,13 @@ export async function main(ns) {
                 restartOnArgsChange: true,
                 relaunchIfExited: true,
                 cooldownMs: 30 * 1000,
+                ignoreReservedRam: false,
+            },
+            {
+                name: "crime.js",
+                shouldRun: () => options['money-focus'] && bitNodeN == 3 && (options['autopilot-mode'] ? options['casino-complete'] : true) && reqRam(64),
+                args: () => ["--fast-crimes-only"],
+                relaunchIfExited: false,
                 ignoreReservedRam: false,
             },
             { name: "hacknet-upgrade-manager.js", shouldRun: () => shouldUpgradeHacknet(), args: () => ["--continuous", "--max-payoff-time", "1h", "--interval", "0", "--reserve", hacknetReserve(ns)], shouldTail: false }, // One-time kickstart of hash income by buying everything with up to 1h payoff time immediately
