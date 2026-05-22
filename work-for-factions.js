@@ -5,7 +5,7 @@ import {
 } from './helpers.js'
 
 let options;
-const workForFactionsVersion = "2026-05-22-fix-work-type-selection.2";
+const workForFactionsVersion = "2026-05-22-fix-work-type-selection.3";
 const argsSchema = [
     ['first', []], // Grind rep with these factions first. Also forces a join of this faction if we normally wouldn't (e.g. no desired augs or all augs owned)
     ['skip', []], // Don't work for these factions
@@ -2682,6 +2682,14 @@ async function startWorkForFaction(ns, factionName, work, focus) {
     return await getNsDataThroughFile(ns, `ns.singularity.workForFaction(ns.args[0], ns.args[1], ns.args[2])`, null, [factionName, work, focus])
 }
 
+/** @param {NS} ns
+ *  @returns {Promise<{reputation: number}>} Partial Gains object for the given faction work type */
+async function getFormulasWorkFactionGains(ns, work, favor) {
+    return await getNsDataThroughFile(ns,
+        `ns.formulas.work.factionGains(ns.getPlayer(), ns.args[0], ns.args[1])`,
+        '/Temp/wff-factionGains.txt', [work, favor]);
+}
+
 /** Measure our rep gain rate (per second)
  * TODO: Move this to helpers.js, measure all rep gain rates over a parameterizable number of game ticks (default 1) and return them all.
  * @param {NS} ns
@@ -2724,9 +2732,7 @@ async function detectBestFactionWork(ns, factionName, favor = 0) {
         let rate;
         if (hasFormulas) {
             await stop(ns);
-            const gains = await getNsDataThroughFile(ns,
-                `ns.formulas.work.factionGains(ns.getPlayer(), ns.args[0], ns.args[1])`,
-                '/Temp/wff-factionGains.txt', [work, favor]);
+            const gains = await getFormulasWorkFactionGains(ns, work, favor);
             rate = gains?.reputation ?? 0;
         } else {
             await ns.sleep(500); // wait ≥2 game ticks so the new work type accumulates rep before sampling
