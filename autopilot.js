@@ -1128,7 +1128,8 @@ export async function main(ns) {
                 daemonArgs.push('--spend-hashes-on-server-hacking-threshold', options['spend-hashes-on-server-hacking-threshold']);
             // hud.js runs on home and uses ~3 GB; add that to daemon's home-RAM reservation
             // so temp scripts (e.g. destroyW0r1dD43m0n at 33.6 GB) still have room to run.
-            daemonArgs.push('--reserved-ram', options['no-tail-windows'] ? 32 : 36);
+            // In BN3 money-focus, reserve 700 GB so corporation.js has room to spawn temp scripts.
+            daemonArgs.push('--reserved-ram', moneyFocus ? 700 : (options['no-tail-windows'] ? 32 : 36));
             if (Number(options['work-tail-x']) >= 0) daemonArgs.push('--work-tail-x', options['work-tail-x']);
             if (Number(options['work-tail-y']) >= 0) daemonArgs.push('--work-tail-y', options['work-tail-y']);
             if (Number(options['work-tail-width']) > 0) daemonArgs.push('--work-tail-width', options['work-tail-width']);
