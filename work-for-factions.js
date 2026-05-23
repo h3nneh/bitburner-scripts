@@ -1864,6 +1864,7 @@ export async function workForSingleFaction(ns, factionName, forceThroughInvitePr
         }
     } catch (err) {
         ns.print(`WARN: Method comparison failed for "${factionName}": ${getErrorInfo(err)}. Defaulting to infiltration.`);
+        mainLoopStart = Date.now(); // detectBestFactionWork resets mainLoopStart=0 on failure; restore so infiltration loop doesn't immediately break
         await stop(ns);
     }
     let lastStatusUpdateTime = 0;
