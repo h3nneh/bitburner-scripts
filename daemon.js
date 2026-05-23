@@ -508,7 +508,6 @@ export async function main(ns) {
             else
                 args.push("--disable-cross-city-background-training");
             if (options['no-tail-windows']) args.push("--no-tail-windows");
-            if (options['bn3-first-install']) args.push("--bn3-first-install");
             if (shouldUseRushGangFactionMode()) {
                 args.push("--crime-focus", "--training-stat-per-multi-threshold", 200, "--prioritize-invites");
             }
