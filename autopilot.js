@@ -15,7 +15,7 @@ const preCasinoInfiltrationResultFile = "/Temp/autopilot-pre-casino-infiltration
 const earlyBootstrapPurchasesFile = `/Temp/early-bootstrap-purchases-${autopilotVersion}.txt`;
 const hudStateFile = "/Temp/autopilot-hud.txt";
 const earlyHomeRamTarget = 1024;
-const bn3EarlyHomeRamTarget = 4096;
+const bn3EarlyHomeRamTarget = 2048;
 
 const preCasinoBlockedScripts = [
     'daemon.js',
