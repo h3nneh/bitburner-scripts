@@ -617,7 +617,7 @@ async function bestFactionWork(ns, sleeve, i, faction) {
       if (!await getNsDataThroughFile(ns, `ns.sleeve.setToFactionWork(ns.args[0], ns.args[1], ns.args[2])`, `/Temp/sleeve-setToFactionWork.txt`, [i, faction, work])) {
         continue; // This type of faction work must not be supported
       }
-    } catch { }
+    } catch { continue; }
     return work;
   }
 }
