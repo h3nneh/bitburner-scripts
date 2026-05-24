@@ -1409,10 +1409,6 @@ export async function main(ns) {
             return false;
         if (isBn3RamBootstrapActive())
             return true;
-        if (!options['money-focus'])
-            return false;
-        if (homeRam < bn3EarlyHomeRamTarget)
-            return true;
         if (options['disable-corporation'])
             return false;
         runningScripts ??= getRunningScriptsDirect(ns);

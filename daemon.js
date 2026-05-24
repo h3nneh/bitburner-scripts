@@ -435,7 +435,7 @@ export async function main(ns) {
         }
 
         function shouldBypassCorporationHomeRamGate() {
-            return options['money-focus'] && bitNodeN == 3;
+            return bitNodeN == 3;
         }
 
         function getEffectiveSf4Level() {
