@@ -640,7 +640,7 @@ export async function main(ns) {
             },
             {
                 name: "crime.js",
-                shouldRun: () => options['money-focus'] && bitNodeN == 3 && (options['autopilot-mode'] ? options['casino-complete'] : true) && reqRam(64),
+                shouldRun: () => options['money-focus'] && bitNodeN == 3 && !options['cashroot-priority'] && (options['autopilot-mode'] ? options['casino-complete'] : true) && reqRam(64),
                 args: () => ["--fast-crimes-only"],
                 relaunchIfExited: false,
                 ignoreReservedRam: false,
