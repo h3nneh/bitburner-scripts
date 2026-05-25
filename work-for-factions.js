@@ -398,6 +398,10 @@ export async function main(ns) {
         log(ns, `WARNING: Singularity functions are much more expensive with lower levels of SF4 (you have SF4.${dictSourceFiles[4]}). ` +
             `You may encounter RAM issues with and have to wait until you have more RAM available to run this script successfully.`, false, 'warning');
 
+    // Kill crime.js to prevent it from interfering with our managed work/crime cycles
+    const crimeKilled = await getNsDataThroughFile(ns, `ns.scriptKill('crime.js', 'home')`, '/Temp/wff-kill-crime.js');
+    if (crimeKilled) log(ns, 'INFO: Killed running crime.js to prevent interference.', false, 'info');
+
     let loadingComplete = false; // In the event of suboptimal RAM conditions, keep trying to start until we succeed
     while (!loadingComplete) {
         try {
