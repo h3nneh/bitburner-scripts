@@ -35,7 +35,7 @@ export async function main(ns) {
                 if (!servers.includes(j)) servers.push(j), routes[j] = routes[servers[i]].slice(), routes[j].push(j);
 
         // Filter out servers that cannot or should not be hacked / backdoored
-        const hackableServers = servers.filter(s => s != "home" && !s.includes("hacknet-") && !s.includes("daemon")) /*or whatever you name your purchased servers*/
+        const hackableServers = servers.filter(s => s != "home" && !s.includes("hacknet-") && !s.includes("daemon") && !s.includes("pserv")) /*or whatever you name your purchased servers*/
 
         // Get the required hacking level of each server
         const dictRequiredHackingLevels = await getNsDataThroughFile(ns,
