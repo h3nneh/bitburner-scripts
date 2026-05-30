@@ -5,7 +5,7 @@ import {
     formatMoney, formatDuration, formatRam, getErrorInfo, tail, jsonReplacer, scanAllServers
 } from './helpers.js'
 
-const autopilotVersion = "2026-05-12-bn3-money-focus-opt-in.1";
+const autopilotVersion = "2026-05-30-sphyxos-corp.1";
 const stockValueHelperRam = 3.6;
 const ownedAugmentationsHelperRam = 6.6;
 const earlyBootstrapHelperRam = 12;

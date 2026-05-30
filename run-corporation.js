@@ -9,7 +9,7 @@ import { disableLogs, formatMoney, formatRam, scanAllServers } from './helpers.j
  * @param {NS} ns
  */
 export async function main(ns) {
-    const version = '2026-05-18-corp-preflight-net-worth.1';
+    const version = '2026-05-30-sphyxos-corp.1';
     ns.print(`run-corporation.js version ${version}`);
     disableLogs(ns, ['getServerMaxRam', 'getServerUsedRam', 'scp', 'exec', 'write', 'read', 'sleep', 'ps']);
 	const scriptName = 'corporation.js';

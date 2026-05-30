@@ -1,1319 +1,2921 @@
-// Source: https://github.com/66Ton99/bitburner-scripts/blob/main/corporation.js
-/**
- * Set up and run a corporation. Note that access to the corporation API costs tons of RAM.
- *
- * TODO: Make daemon.js reserve memory for a corporate script to run someplace if we have enough RAM.
- */
-
-import { argsSchema } from './corporation-options.js';
-import { formatMoney, formatNumberShort, getActiveSourceFiles, getStocksValue, getFilePath } from './helpers.js';
-
-// Formatting for money and big numbers.
-const mf = (n) => formatMoney(n, 6, 2);
-const nf = (n) => formatNumberShort(n, 3);
-const _ = globalThis._; // lodash
-/** @typedef {import('./index.js').NS} NS */
-/** @typedef {import('./index.js').Division} Division */
-/** @typedef {import('./index.js').CorporationInfo} CorporationInfo */
-
-// Global constants
-const desiredDivisions = 2; // One Material division to kickstart things, then a product division to really make money.
-
-const bonusMaterials = ['Hardware', 'Robots', 'AI Cores', 'Real Estate'];
-const materialSizes = { Water: 0.05, Ore: 0.01, Minerals: 0.04, Food: 0.03, Plants: 0.05, Metal: 0.1, Hardware: 0.06, Chemicals: 0.05, Drugs: 0.02, Robots: 0.5, 'AI Cores': 0.1, 'Real Estate': 0.005 };
-const allMaterials = ['Water', 'Ore', 'Minerals', 'Food', 'Plants', 'Metal', 'Hardware', 'Chemicals', 'Drugs', 'Robots', 'AI Cores', 'Real Estate'];
-// Map of material (by name) to their sizes (how much space it takes in warehouse)
-const unlocks = ['Export', 'Smart Supply', 'Market Research - Demand', 'Market Data - Competition', 'Shady Accounting', 'Government Partnership', 'Warehouse API', 'Office API'];
-const upgrades = ['Smart Factories', 'Smart Storage', 'Wilson Analytics', 'Nuoptimal Nootropic Injector Implants', 'Speech Processor Implants', 'Neural Accelerators', 'FocusWires', 'ABC SalesBots', 'Project Insight'];
-const cities = ['Aevum', 'Chongqing', 'Sector-12', 'New Tokyo', 'Ishima', 'Volhaven'];
-const hqCity = 'Aevum'; // Our production industries will need a headquarters. It doesn't matter which city we use, AFAICT.
-const jobs = ['Operations', 'Engineer', 'Research & Development', 'Management', 'Business']; // Also, 'Training', but that's not a real job.
-const industryAliases = { RealEstate: 'Real Estate', Computer: 'Computer Hardware', Food: 'Restaurant', Utilities: 'Water Utilities' };
-
-// Classes here, since we want to use Industry shortly.
-class Industry {
-    constructor(name = '', robFac = 0.0, aiFac = 0.0, advFac = 0.0, sciFac = 0.0, hwFac = 0.0, reFac = 0.0, reqMats = {}, prodMats = [], makesProducts = false, startupCost = 0) {
-        this.name = name;
-        this.factors = {
-            Hardware: hwFac,
-            Robots: robFac,
-            'AI Cores': aiFac,
-            'Real Estate': reFac,
-            Science: sciFac,
-            Advertising: advFac,
-        };
-        this.reqMats = reqMats;
-        this.prodMats = prodMats;
-        this.makesProducts = makesProducts;
-        this.startupCost = startupCost;
-        this.materialBonusPerSqMeter = {};
-        for (const material of bonusMaterials) {
-            this.materialBonusPerSqMeter[material] = this.factors[material] / materialSizes[material];
-        }
-        let scaleFactor = Object.values(this.materialBonusPerSqMeter).reduce((sum, prod) => sum + prod, 0);
-        this.scaledMaterialBonus = {};
-        for (const material of bonusMaterials) {
-            this.scaledMaterialBonus[material] = this.materialBonusPerSqMeter[material] / scaleFactor;
-        }
-    }
-    static fromObject(obj) {
-        return new Industry(obj.name, obj.robFac, obj.aiFac, obj.advFac, obj.sciFac, obj.hwFac, obj.reFac, obj.reqMats, obj.prodMats, obj.makesProducts, obj.startupCost);
-    }
-}
-class Task {
-    /**
-     * A Task that we will try to run later.
-     * @param {string} name Human readable name of the task to be run.
-     * @param {function} run callback to run the task.
-     * @param {number} cost allocated budget for this task
-     * @param {number} priority priority, higher number is a higher priority
-     */
-    constructor(name, run, cost = 0, priority = 0) {
-        this.name = name;
-        this.run = run;
-        this.cost = cost;
-        this.priority = priority; // Higher will be done sooner.
-    }
-}
-
-// Industry and Material data copied from Bitburner's code on February 10, 2022. (https://github.com/danielyxie/bitburner/blob/dev/src/Corporation/Industry.ts) with startupCost added manually.
-/** @type {Industry[]} */
-const industries = [
-    Industry.fromObject({ name: 'Agriculture', reFac: 0.72, sciFac: 0.5, hwFac: 0.2, robFac: 0.3, aiFac: 0.3, advFac: 0.04, reqMats: { Water: 0.5, Chemicals: 0.2 }, prodMats: ['Plants', 'Food'], startupCost: 40e9 }),
-    Industry.fromObject({ name: 'Refinery', reFac: 0.3, sciFac: 0.5, hwFac: 0.5, robFac: 0.4, aiFac: 0.3, advFac: 0.04, reqMats: { Ore: 1 }, prodMats: ['Metal'], startupCost: 50e9 }),
-    Industry.fromObject({ name: 'Chemical', reFac: 0.25, sciFac: 0.75, hwFac: 0.2, robFac: 0.25, aiFac: 0.2, advFac: 0.07, reqMats: { Plants: 1, Water: 0.5 }, prodMats: ['Chemicals'], startupCost: 70e9 }),
-    Industry.fromObject({ name: 'Fishing', reFac: 0.15, sciFac: 0.35, hwFac: 0.35, robFac: 0.5, aiFac: 0.2, advFac: 0.08, reqMats: { Plants: 0.5 }, prodMats: ['Food'], startupCost: 80e9 }),
-    Industry.fromObject({ name: 'Water Utilities', reFac: 0.5, sciFac: 0.6, robFac: 0.4, aiFac: 0.4, advFac: 0.08, reqMats: { Hardware: 0.1 }, prodMats: ['Water'], startupCost: 150e9 }),
-    Industry.fromObject({ name: 'Mining', reFac: 0.3, sciFac: 0.26, hwFac: 0.4, robFac: 0.45, aiFac: 0.45, advFac: 0.06, reqMats: { Hardware: 0.1 }, prodMats: ['Ore', 'Minerals'], startupCost: 300e9 }),
-    //reFac is unique for 'Food' bc it diminishes greatly per city. Handle this separately in code?
-    Industry.fromObject({ name: 'Restaurant', sciFac: 0.12, hwFac: 0.15, robFac: 0.3, aiFac: 0.25, advFac: 0.25, reFac: 0.05, reqMats: { Food: 0.5, Water: 0.5 }, makesProducts: true, startupCost: 10e9 }),
-    Industry.fromObject({ name: 'Tobacco', reFac: 0.15, sciFac: 0.75, hwFac: 0.15, robFac: 0.2, aiFac: 0.15, advFac: 0.2, reqMats: { Plants: 1 }, makesProducts: true, startupCost: 20e9 }),
-    Industry.fromObject({ name: 'Software', sciFac: 0.62, advFac: 0.16, hwFac: 0.25, reFac: 0.15, aiFac: 0.18, robFac: 0.05, reqMats: { Hardware: 0.5 }, prodMats: ['AI Cores'], makesProducts: true, startupCost: 25e9 }),
-    Industry.fromObject({ name: 'Pharmaceutical', reFac: 0.05, sciFac: 0.8, hwFac: 0.15, robFac: 0.25, aiFac: 0.2, advFac: 0.16, reqMats: { Chemicals: 2, Water: 0.5 }, prodMats: ['Drugs'], makesProducts: true, startupCost: 200e9 }),
-    Industry.fromObject({ name: 'Computer Hardware', reFac: 0.2, sciFac: 0.62, robFac: 0.36, aiFac: 0.19, advFac: 0.17, reqMats: { Metal: 2 }, prodMats: ['Hardware'], makesProducts: true, startupCost: 500e9 }),
-    Industry.fromObject({ name: 'Real Estate', robFac: 0.6, aiFac: 0.6, advFac: 0.25, sciFac: 0.05, hwFac: 0.05, reqMats: { Metal: 5, Plants: 1, Water: 2, Hardware: 4 }, prodMats: ['Real Estate'], makesProducts: true, startupCost: 600e9 }),
-    Industry.fromObject({ name: 'Healthcare', reFac: 0.1, sciFac: 0.75, advFac: 0.11, hwFac: 0.1, robFac: 0.1, aiFac: 0.1, reqMats: { Robots: 10, 'AI Cores': 5, Drugs: 5, Food: 5 }, makesProducts: true, startupCost: 750e9 }),
-    Industry.fromObject({ name: 'Robotics', reFac: 0.32, sciFac: 0.65, aiFac: 0.36, advFac: 0.18, hwFac: 0.19, reqMats: { Hardware: 5, 'AI Cores': 3 }, prodMats: ['Robots'], makesProducts: true, startupCost: 1e12 }),
-];
-
-// Global state
-let dictSourceFiles;
-/** @type {CorporationInfo} */
-let myCorporation;
-let options;
-let verbose;
-let raisingCapital = 0; // Used to flag that we are trying to raise private funding
-let extraReserve = 0; // Used when we're saving to fund a new product.
-let fillSpaceQueue = []; // Flag these offices as needing workers assigned to roles.
-
-function getCorpDivisions(ns) {
-    return myCorporation.divisions.map((division) => (typeof division === 'string' ? ns.corporation.getDivision(division) : division));
-}
-
-function getDivisionIndustryName(division) {
-    const industryName = division.industry;
-    return industryAliases[industryName] || industryName;
-}
-
-function getIndustry(division) {
-    const industryName = getDivisionIndustryName(division);
-    const industry = industries.find((industry) => industry.name === industryName);
-    if (!industry) throw new Error(`Unsupported corporation industry "${industryName}" for division "${division.name}".`);
-    return industry;
-}
-
-function getDivisionResearch(division) {
-    return division.researchPoints;
-}
-
-function getDivisionProductionMult(division) {
-    return division.productionMult;
-}
-
-function getCorpState(corporation = myCorporation) {
-    return corporation.nextState;
-}
-
-function getDivisionProductCity(division) {
-    return division.cities.includes(hqCity) ? hqCity : division.cities[0];
-}
-
-function hasUnlock(ns, unlockName) {
-    return ns.corporation.hasUnlock(unlockName);
-}
-
-function getUnlockCost(ns, unlockName) {
-    return ns.corporation.getUnlockCost(unlockName);
-}
-
-function purchaseUnlock(ns, unlockName) {
-    return ns.corporation.purchaseUnlock(unlockName);
-}
-
-function getCorpConstants(ns) {
-    return ns.corporation.getConstants();
-}
-
-function getProduct(ns, divisionName, productName, city = hqCity) {
-    return ns.corporation.getProduct(divisionName, city, productName);
-}
-
-function getProductCityStats(ns, divisionName, productName, city) {
-    const product = getProduct(ns, divisionName, productName, city);
-    return {
-        product,
-        qty: product.stored,
-        produced: product.productionAmount,
-        sold: product.actualSellAmount,
-        desiredSellPrice: product.desiredSellPrice,
-    };
-}
-
-export function autocomplete(data, _) {
-    data.flags(argsSchema);
-    return [];
-}
-
-/** @param {NS} ns **/
+/* Author: Sphyxis */
+const corpName = "Sphyx-Corp"
+const div1 = "Family Farm" //Agriculture
+const div2 = "The Bog Pit" //Chemical
+const div3 = "Ciggy\'s r Us" //Tobacco
+const div4 = "Bob\'s Burgers" //Restaurant
+const div5 = "Brawndo" //Water Utilities
+const div6 = "Fabrikator" //Computer Hardware
+const div7 = "The Furnace" //Refinery
+const div8 = "Diggers Inc." //Mining
+let win
+let workersWIP = []
+const round1Money = 440e9 //b
+const round2Money = 8.8e12 //t
+const round3Money = 12e15 //q
+const round4Money = 500e18 //Q
+let tobaccoBooster = false
+let ta2DB = [] //TA2 DB
+const indDataDB = []
+const matDataDB = []
+let researchedDB = []
+let hasDivDB = []
+let hasOfficeDB = []
+let hasWarehouseDB = []
+let roundTrigger = false
+let bnMults
+let oldRound
+let teaNeeded
+let investOffer
+const HEIGHT = 780
+const WIDTH = 900
+/** @param {NS} ns */
 export async function main(ns) {
-    // Pull in any information we only need at startup.
-    const version = '2026-05-17-no-corp-exit.1';
-    ns.print(`corporation.js version ${version}`);
-    options = ns.flags(argsSchema);
-    verbose = options.verbose;
-    dictSourceFiles = await getActiveSourceFiles(ns);
-    const currentNode = ns.getResetInfo().currentNode;
-    const sf3Level = dictSourceFiles[3] || 0;
-    let runOnce = options.once;
-    let shouldManage = !options['price-discovery-only'];
+  ns.disableLog("ALL")
+  const showTail = !ns.args.includes("quiet") && !ns.args.includes("--no-tail-windows")
+  if (showTail) ns.ui.openTail()
+  if (showTail) ns.ui.resizeTail(WIDTH, HEIGHT)
+  ns.clearLog()
+  ns.clearPort(9)
+  ns.writePort(9, ns.pid)
+  ns.atExit(() => {
+    ns.clearPort(9)
+    for (const worker of workersWIP) {
+      globalThis["SphyxOSCorpWebWorkers"].push(worker) //Dirty push
+      worker = null
+    }
+  })
+  if (!globalThis["SphyxOSCorpWebWorkers"]) globalThis["SphyxOSCorpWebWorkers"] = []
+  hasDivDB = []
+  researchedDB = []
+  hasOfficeDB = []
+  hasWarehouseDB = []
+  win = false
+  ns.atExit(() => {
+    ns.clearPort(9)
+    if (win) win.close()
+  })
+  //Create our proxy file
+  writeProxy(ns)
+  writeBNMults(ns)
+  const resetInfo = await proxy(ns, "getResetInfo")
+  const myBN = resetInfo.currentNode
+  const sfLevel = resetInfo.ownedSF.has(3) ? resetInfo.ownedSF.get(3) : 0
+  if (myBN !== 3 && sfLevel !== 3) {
+    update(ns, "You cannot start a corp yet.  Be in BN 3 or have SF 3.3 to start.")
+    ns.exit()
+  }
 
-    // If we haven't unlocked corporations, just give up now.
-    if (sf3Level <= 0 && currentNode !== 3) {
-        ns.tprint(`ERROR: Corporation API is unavailable. Current BN${currentNode}, SF3.${sf3Level}. Exiting.`);
-        ns.exit();
+  bnMults = await getBNMults(ns)
+  const selfFund = myBN === 3 ? false : true
+  if (!await proxy(ns, "corporation.canCreateCorporation", selfFund)) {
+    ns.clearLog()
+    ns.print("Cannot create a corporation")
+    ns.exit()
+  }
+  getCommands(ns)
+  await ns.asleep(4)
+  while (!await proxy(ns, "corporation.hasCorporation")) {
+    await proxy(ns, "corporation.createCorporation", corpName, selfFund)
+    await ns.asleep(1000)
+    clearLogs(ns)
+    update(ns, "Cannot create corporation yet")
+  }
+  const invest = await proxy(ns, "corporation.getInvestmentOffer")
+  let round = invest.round
+  teaNeeded = true
+  oldRound = 0
+  tobaccoBooster = false
+  while (round === 1) {
+    await prep(ns)
+    await updateHud(ns)
+    let division1 = await proxy(ns, "corporation.getDivision", div1)
+    if (division1.numAdVerts < 2)
+      while (division1.numAdVerts < 2) {
+        await proxy(ns, "corporation.hireAdVert", div1)
+        division1 = await proxy(ns, "corporation.getDivision", div1)
+      }
+    const corp = await proxy(ns, "corporation.getCorporation")
+    const nState = corp.nextState
+    if (nState === "SALE")
+      await sell(ns)
+    if (nState === "PURCHASE") {
+      const office = await proxy(ns, "corporation.getOffice", div1, "Sector-12")
+      if (!teaNeeded && office.employeeJobs.Business > 0) {
+        await optimizeMats(ns)
+      }
+      await purchase(ns)
+    }
+    if (nState === "START") {
+      teaNeeded = await teaParty(ns)
+      round = await checkInvest(ns)
+    }
+    if (nState === "EXPORT") {
+      await manageOffice(ns)
+      await warehouseUpgrade(ns)
+    }
+    await proxy(ns, "corporation.levelUpgrade", "ABC SalesBots")
+    await ns.corporation.nextUpdate()
+  }
+  while (round === 2) {
+    await prep(ns)
+    await updateHud(ns)
+    let hasDiv2 = false
+    //Set up Tobacco    
+    let count = 0
+    if (researchedDB["Export"])
+      for (const city of cities)
+        if (hasWarehouseDB[div2 + city]) count++
+    if (count === 6)
+      hasDiv2 = true
+    while (hasDiv2 && await proxy(ns, "corporation.getUpgradeLevel", "Smart Factories") < 16 && await proxy(ns, "corporation.getUpgradeLevelCost", "Smart Factories") <= await corpFunds(ns))
+      await proxy(ns, "corporation.levelUpgrade", "Smart Factories")
+    const corp = await proxy(ns, "corporation.getCorporation")
+    const nState = corp.nextState
+    if (nState === "SALE")
+      await sell(ns)
+    if (nState === "PURCHASE") {
+      await importExport(ns)
+      await purchase(ns)
+      const materials = await proxy(ns, "corporation.getMaterial", div1, "Sector-12", "Plants")
+      while (await corpFunds(ns) > await proxy(ns, "corporation.getHireAdVertCost", div1) && await proxy(ns, "corporation.getHireAdVertCount", div1) < 12 && hasDiv2)
+        await proxy(ns, "corporation.hireAdVert", div1)
+      if (await proxy(ns, "corporation.getHireAdVertCount", div1) < 11 && materials.stored > 200)
+        await proxy(ns, "corporation.hireAdVert", div1)
+      else if (hasDiv2 && materials.stored > 200)
+        await proxy(ns, "corporation.hireAdVert", div1)
+      const office = await proxy(ns, "corporation.getOffice", div1, "Sector-12")
+      if (ns.ui.getGameInfo()?.versionNumber === undefined) {
+        if (!teaNeeded && office.employeeJobs.Business > 0 && await proxy(ns, "corporation.getUpgradeLevel", "DreamSense") === 0)
+          await proxy(ns, "corporation.levelUpgrade", "DreamSense")
+      }
+    }
+    if (nState === "START") {
+      teaNeeded = await teaParty(ns)
+      round = await checkInvest(ns)
+      await warehouseUpgrade(ns)
+    }
+    if (nState === "EXPORT") {
+      await manageOffice(ns)
+      const office = await proxy(ns, "corporation.getOffice", div1, "Sector-12")
+      if (!teaNeeded && office.employeeJobs.Business > 0) {
+
+        while (hasDiv2 && await corpFunds(ns) >= await proxy(ns, "corporation.getUpgradeLevelCost", "ABC SalesBots") && await proxy(ns, "corporation.getUpgradeLevel", "ABC SalesBots") < 30)
+          await proxy(ns, "corporation.levelUpgrade", "ABC SalesBots")
+        await optimizeMats(ns)
+      }
+      while (await corpFunds(ns) >= await proxy(ns, "corporation.getUpgradeLevelCost", "ABC SalesBots") && await proxy(ns, "corporation.getUpgradeLevel", "ABC SalesBots") < 10)
+        await proxy(ns, "corporation.levelUpgrade", "ABC SalesBots")
+    }
+    await ns.corporation.nextUpdate()
+  }
+  while (round === 3 || round === 4) {
+    await prep(ns)
+    await updateHud(ns)
+    while (await proxy(ns, "corporation.getUpgradeLevel", "Smart Factories") < 20 && await proxy(ns, "corporation.getUpgradeLevelCost", "Smart Factories") <= await corpFunds(ns))
+      await proxy(ns, "corporation.levelUpgrade", "Smart Factories")
+
+    const corp = await proxy(ns, "corporation.getCorporation")
+    const nState = corp.nextState
+    if (nState === "SALE") {
+      await sell(ns)
+    }
+    if (nState === "PURCHASE") {
+      await importExport(ns)
+      await purchase(ns)
+      const material = await proxy(ns, "corporation.getMaterial", div1, "Sector-12", "Plants")
+      if (material.stored > 200)
+        await proxy(ns, "corporation.hireAdVert", div1)
+      const office = await proxy(ns, "corporation.getOffice", div1, "Sector-12")
+      if (ns.ui.getGameInfo()?.versionNumber === undefined) {
+        if (!teaNeeded && office.employeeJobs.Business > 0 && await proxy(ns, "corporation.getUpgradeLevel", "DreamSense") === 0)
+          await proxy(ns, "corporation.levelUpgrade", "DreamSense")
+      }
+    }
+    if (nState === "START") {
+      teaNeeded = await teaParty(ns)
+      round = await checkInvest(ns)
+      await manageProducts(ns)
+      await spendRP(ns)
+      await warehouseUpgrade(ns)
+    }
+    if (nState === "EXPORT") {
+      await updateMisc(ns)
+      await manageOffice(ns)
+      await optimizeMats(ns)
+    }
+    await ns.corporation.nextUpdate()
+  }
+  while (round === 5) {
+    await prep(ns)
+    await updateHud(ns)
+
+    const corp = await proxy(ns, "corporation.getCorporation")
+    const nState = corp.nextState
+    if (nState === "SALE") {
+      await sell(ns)
+    }
+    if (nState === "PURCHASE") {
+      await updateMisc(ns)
+      await importExport(ns)
+      await purchase(ns)
     }
 
-    // See if we've already created a corporation.
-    myCorporation = tryGetCorporation(ns);
-    let hasCorporation = !!myCorporation;
-    ns.print(`Corporation startup: BN${currentNode}, SF3.${sf3Level}, hasCorporation=${hasCorporation}.`);
-    // In BN3 itself, creating a seed-funded corporation grants Warehouse and Office APIs.
-    // Outside BN3, we need SF3.3 for the same bootstrap path.
-    if ((currentNode === 3 || dictSourceFiles[3] >= 3) && !hasCorporation) {
-        await doInitialCorporateSetup(ns);
-        myCorporation = tryGetCorporation(ns);
-        hasCorporation = !!myCorporation;
-        if (!hasCorporation) {
-            ns.tprint(`ERROR: Corporation bootstrap finished but no corporation exists. ` +
-                `Current BN${currentNode}, SF3.${sf3Level}. Aborting before management loop.`);
-            ns.exit();
-        }
-    } else if (dictSourceFiles[3] < 3 && !hasCorporation) {
-        ns.tprint(`Missing SF3.3 and no existing corporation. Current BN${currentNode}, SF3.${sf3Level}.`);
-        ns.tprint(`You must found the corporation manually, or wait until BN3/SF3.3 before this script can bootstrap it.`);
-        ns.exit();
+    if (nState === "START") {
+      teaNeeded = await teaParty(ns)
+      await manageProducts(ns)
+      await spendRP(ns)
+      await warehouseUpgrade(ns)
     }
-
-    // If we already have a corporation, make sure we didn't leave any workers waiting for assignment.
-    if (hasCorporation) {
-        for (const division of getCorpDivisions(ns)) {
-            for (const city of division.cities) {
-                fillSpaceQueue.push(`${division.name}/${city}`);
-            }
-        }
+    if (nState === "EXPORT") {
+      await optimizeMats(ns)
+      await manageOffice(ns)
     }
-
-    // We've set up the initial corporation, now run it over time.
-    while (true) {
-        // Do all our spending and expanding.
-        if (shouldManage) await doManageCorporation(ns);
-
-        // Try to manage sale prices for products.
-        await doPriceDiscovery(ns);
-
-        // While we wait for the next tick, process any open office positions
-        await fillOpenPositionsFromQueue(ns);
-
-        if (runOnce) {
-            log(ns, 'Ran once through the corporation loop. Exiting.');
-            ns.exit();
-        }
-
-        // Sleep until the next time we go into the 'START' phase
-        await sleepWhileNotInStartState(ns, true);
-
-        if (verbose) log(ns, ``);
-    }
+    await ns.corporation.nextUpdate()
+  }
 }
-
-function tryGetCorporation(ns) {
-    try {
-        return ns.corporation.getCorporation();
-    } catch {
-        return null;
+/** @param {NS} ns */
+async function checkInvest(ns) {
+  const round = investOffer.round
+  const corp = await proxy(ns, "corporation.getCorporation")
+  if (round === 1) {
+    if (round1Money * bnMults.CorporationValuation < investOffer.funds + (corp.funds * bnMults.CorporationValuation) || roundTrigger) {
+      roundTrigger = true
+      if (oldRound <= investOffer.funds + (corp.funds * bnMults.CorporationValuation)) {
+        oldRound = investOffer.funds + (corp.funds * bnMults.CorporationValuation)
+      }
+      else {
+        await proxy(ns, "corporation.acceptInvestmentOffer")
+        teaNeeded = true
+        roundTrigger = false
+        if (!ns.args.includes("quiet")) ns.tprintf("Off to round 2!")
+        return 2
+      }
     }
+    return 1
+  }
+  if (round === 2) {
+    let hasDiv2 = false
+    //Set up Tobacco    
+    let count = 0
+    if (researchedDB["Export"])
+      for (const city of cities)
+        if (hasWarehouseDB[div2 + city]) count++
+    if (count === 6)
+      hasDiv2 = true
+    if ((hasDiv2 && investOffer.funds + corp.funds > 30e9 && round2Money * bnMults.CorporationValuation < investOffer.funds + corp.funds) || roundTrigger) {
+      roundTrigger = true
+      if (oldRound <= investOffer.funds + Math.min(30e9, corp.funds)) {
+        oldRound = investOffer.funds + Math.min(30e9, corp.funds)
+      }
+      else if (investOffer.funds + Math.min(30e9, corp.funds) > 30e9) {
+        await proxy(ns, "corporation.acceptInvestmentOffer")
+        teaNeeded = true
+        roundTrigger = false
+        if (!ns.args.includes("quiet")) ns.tprintf("Off to round 3!")
+        return 3
+      }
+    }
+    return 2
+  }
+  if (round === 3) {
+    if (round3Money * bnMults.CorporationValuation < (investOffer.funds * 4) + (corp.funds * bnMults.CorporationValuation)) {
+      tobaccoBooster = true
+    }
+    if ((round3Money * bnMults.CorporationValuation < investOffer.funds + (corp.funds * bnMults.CorporationValuation)) || roundTrigger) {
+      roundTrigger = true
+      if (oldRound <= investOffer.funds + (corp.funds * bnMults.CorporationValuation)) {
+        oldRound = investOffer.funds + (corp.funds * bnMults.CorporationValuation)
+      }
+      else {
+        await proxy(ns, "corporation.acceptInvestmentOffer")
+        teaNeeded = true
+        roundTrigger = false
+        tobaccoBooster = false
+        if (!ns.args.includes("quiet")) ns.tprintf("Off to round 4!")
+        return 4
+      }
+    }
+    return 3
+  }
+  if (round === 4) {
+    if (round4Money * bnMults.CorporationValuation < (investOffer.funds * 4) + (corp.funds * bnMults.CorporationValuation)) {
+      tobaccoBooster = true
+    }
+    if ((round4Money * bnMults.CorporationValuation < investOffer.funds + (corp.funds * bnMults.CorporationValuation)) || roundTrigger) {
+      roundTrigger = true
+      if (oldRound <= investOffer.funds + (corp.funds * bnMults.CorporationValuation)) {
+        oldRound = investOffer.funds + (corp.funds * bnMults.CorporationValuation)
+      }
+      else {
+        await proxy(ns, "corporation.acceptInvestmentOffer")
+        teaNeeded = true
+        roundTrigger = false
+        if (!ns.args.includes("quiet")) ns.tprintf("Off to round 5!")
+        return 5
+      }
+    }
+    return 4
+  }
 }
-
-/**
- * This function is called in our main loop. Assess the current state of the corporation, and improve it as best we can.
- * @param {NS} ns
- **/
-async function doManageCorporation(ns) {
-    // Assess the current state of the corporation, and figure out our budget.
-    myCorporation = ns.corporation.getCorporation();
-    let netIncome = myCorporation.revenue - myCorporation.expenses;
-    let now = new Date().toLocaleString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
-
-    if (verbose) log(ns, `----- [ ${myCorporation.name} Quarterly Report ${now} ] -----`);
-    log(ns, `Corporate cash on hand: ${mf(myCorporation.funds)} (Gross: ${mf(myCorporation.revenue)}/s, Net: ${mf(netIncome)}/s)`);
-
-    // See if we can raise more money.
-    await tryRaiseCapital(ns);
-
-    myCorporation = ns.corporation.getCorporation();
-    let budget = myCorporation.funds - options['reserve-amount'] - extraReserve;
-    // If we're making more than $1 sextillion / sec, we need to stop. The game gets slow if we start employing too many people.
-    if (myCorporation.revenue > 1e21) budget = 0;
-    budget = Math.max(0, budget);
-    if (verbose) log(ns, ``);
-    if (verbose) log(ns, `Working with a corporate budget of ${mf(budget)}`);
-
-    // Let's figure out all of the things we'd like to do, before we commit to anything.
-    let tasks = [];
-    /**
-     * What sort of corporation-wide stuff would we like to do?
-     * Buy Unlocks? Buy upgrades?
-     */
-    let availableUnlocks = [],
-        purchasedUnlocks = [];
-    for (const unlockable of unlocks) {
-        if (hasUnlock(ns, unlockable)) purchasedUnlocks.push(unlockable);
-        else availableUnlocks.push(unlockable);
-    }
-    for (const unlockable of availableUnlocks) {
-        let cost = getUnlockCost(ns, unlockable);
-        if (cost > budget) continue;
-        // If we can afford it, and we don't have it yet, consider buying it.
-        let shouldBuy = false;
-        if (unlockable === 'Smart Supply' && cost < budget * 0.8) {
-            // Push this one to the top of the list. Doing it in code is annoying.
-            tasks.push(new Task('Unlock ' + unlockable, () => purchaseUnlock(ns, unlockable), cost, 110));
-        } else if (unlockable === 'Warehouse API' && cost < budget * 0.25) shouldBuy = true;
-        else if (unlockable === 'Office API' && cost < budget * 0.25) shouldBuy = true;
-        else if (unlockable === 'Shady Accounting' && cost < budget * 0.5) shouldBuy = true;
-        else if (unlockable === 'Government Partnership' && cost < budget * 0.5) shouldBuy = true;
-        // else if (unlockable === 'Export' && cost < budget * 0.1) shouldBuy = true;
-
-        // Put the task on our to-do list. Put all unlocks at priority 0 as "nice-to-haves".
-        if (shouldBuy) tasks.push(new Task('Unlock ' + unlockable, () => purchaseUnlock(ns, unlockable), cost, 0));
-    }
-
-    let hasProductionDivision = false;
-    for (const division of getCorpDivisions(ns)) {
-        let industry = getIndustry(division);
-        if (industry.makesProducts) hasProductionDivision = true;
-    }
-    // Can we afford to level any upgrades?
-    for (const upgrade of upgrades) {
-        let cost = ns.corporation.getUpgradeLevelCost(upgrade);
-        let nextLevel = ns.corporation.getUpgradeLevel(upgrade) + 1;
-        if (cost > budget) continue;
-        if (upgrade === 'Wilson Analytics' && cost < budget * 0.9 && hasProductionDivision) {
-            // Analytics fuels advertising, which drives up the price of products, which generates profits.
-            // Scale the priority based on how cheap this is (cheaper is higher priority [0-100]).
-            let priority = Math.round((1 - cost / budget) * 100);
-            tasks.push(new Task(`Upgrading '${upgrade}' to level ${nextLevel}`, () => ns.corporation.levelUpgrade(upgrade), cost, priority));
-        } else if (['Smart Factories', 'Smart Storage'].includes(upgrade) && cost < budget * 0.1) {
-            // More storage means more materials, which drives more production. More production means more sales.
-            tasks.push(new Task(`Upgrading '${upgrade}' to level ${nextLevel}`, () => ns.corporation.levelUpgrade(upgrade), cost, 10));
-        } else if (cost < budget * 0.01) {
-            // Upgrade other stuff too, as long as it's cheap compared to our budget.
-            tasks.push(new Task(`Upgrading '${upgrade}' to level ${nextLevel}`, () => ns.corporation.levelUpgrade(upgrade), cost, 1));
-        }
-    }
-    /**
-     * Let's take a look at our divisions for big problems. Do we need to expand to a new industry? Are any
-     * of our existing industries showing a loss? What else might we need to consider here? We'll be looking
-     * at every division at the end of the loop to do maintence, so this is just high level stuff.
-     */
-    if (myCorporation.divisions.length === 0) {
-        // We definitely need a new division!
-        // Use up to 80% of our budget to start this first division.
-        let newDivisionBudget = budget * 0.9;
-        // Just consider the basic materials-producing industries for our first division. Products take a long time to come online.
-        let possibleIndustries = industries.filter((ind) => !ind.makesProducts);
-        // And only the ones where we'll be able to spend at least half our budget setting up shop.
-        possibleIndustries = possibleIndustries.filter((ind) => ind.startupCost < newDivisionBudget * 0.5);
-        // TODO: Pick a starting industry using some sort of logic.
-        // For the moment, let's just try to go with Agriculture. It's cheap and works well.
-        let firstIndustry = industryAliases[options['first']] || options['first'];
-        let newIndustry = possibleIndustries.find((ind) => ind.name === firstIndustry);
-        if (newIndustry) {
-            tasks.push(new Task(`Add the first division, '${newIndustry.name}'`, () => doCreateNewDivision(ns, newIndustry, newDivisionBudget), newDivisionBudget, 120));
-        } else {
-            // If we can't afford to create our first industry, something has gone very wrong. Quit now.
-            log(ns, `ERROR: Could not afford to create our first industry!`, 'error', 'true');
-            ns.exit();
-        }
-    }
-    // Figure out where we are in the fundraising progression. Don't buy a production industry until after accepting round 3.
-    let offer = ns.corporation.getInvestmentOffer();
-    if (!options['no-expansion'] && myCorporation.divisions.length > 0 && myCorporation.divisions.length < desiredDivisions && offer.round > 3) {
-        let newDivisionBudget = budget * 0.9;
-        let possibleIndustries = industries.filter((ind) => ind.makesProducts);
-        // Only consider industries where we can still have a budget to actually get started.
-        possibleIndustries = possibleIndustries.filter((ind) => ind.startupCost < newDivisionBudget);
-        possibleIndustries.sort((a, b) => a.startupCost - b.startupCost).reverse();
-        if (verbose && possibleIndustries.length) {
-            log(ns, `We would like to expand into a new industry. Possibilities:`);
-            for (const industry of possibleIndustries) {
-                log(ns, `  ${mf(industry.startupCost)} - ${industry.name}`);
-            }
-        } else if (verbose) log(ns, `INFO: We would like to create a new division but we cannot afford one. Willing to spend ${mf(budget)}.`);
-
-        // Try to use the industry from the command line. If that doesn't work, fall back to picking from our list of possibilities.
-        //        let newIndustry = possibleIndustries.find((ind) => ind.name == 'Pharmaceutical');
-        let secondIndustry = industryAliases[options['second']] || options['second'];
-        let newIndustry = possibleIndustries.find((ind) => ind.name === secondIndustry);
-        if (!newIndustry && possibleIndustries.length > 0) {
-            newIndustry = possibleIndustries[0];
-        }
-        if (newIndustry) {
-            tasks.push(new Task(`Add a production division, '${newIndustry.name}'`, () => doCreateNewDivision(ns, newIndustry, newDivisionBudget), newDivisionBudget, 100));
-        } else {
-            const cheapestProductionIndustry = industries.filter((ind) => ind.makesProducts).sort((a, b) => a.startupCost - b.startupCost)[0];
-            log(ns, `INFO: Waiting to afford a production division. Cheapest is '${cheapestProductionIndustry.name}' ` +
-                `at ${mf(cheapestProductionIndustry.startupCost)}; expansion budget is ${mf(newDivisionBudget)}.`);
-        }
-    }
-
-    // If we have all of our divisions bought, it's worth spending hashes on research.
-    if (myCorporation.divisions.length >= desiredDivisions) {
-        if (options['can-spend-hashes'])
-            await doSpendHashes(ns, 'Exchange for Corporation Research');
-    }
-
-    /**
-     * We've looked at the at the corporation, and come up with a list of tasks we'd like to do. Now, figure out
-     * which ones we can actually accomplish on our budget.
-     */
-    tasks.sort((a, b) => a.cost - b.cost).reverse();
-    tasks.sort((a, b) => a.priority - b.priority).reverse();
-    /**
-     * Finally, run each task in priority order. If we run out of money, should we buy lower priority stuff, or
-     * wait? If we wait, the money might get spent expanding a division instead. This may all take some
-     * adjustments over time.
-     */
-    let spent = await runTasks(ns, tasks, budget);
-    if (spent) budget -= spent;
-    if (spent > 0 && verbose) log(ns, `Spent ${mf(spent)} of our budget of ${mf(budget)}.`);
-
-    /**
-     * Even though we've done all of our desired high level tasks, we still need to tend to each division individually.
-     * If we don't have all the automation bits, we may need to adjust pricing. If we have room in warehouses, we can buy
-     * more materials. If we have products, we may be able to start on a new product. We may have research to spend.
-     */
-    for (const division of getCorpDivisions(ns)) {
-        // If we have multiple divisions, hold the lion's share of the budget for production industries.
-        let industry = getIndustry(division);
-        let divisionalBudget = budget;
-        if (myCorporation.divisions.length > 1 && !industry.makesProducts) {
-            divisionalBudget *= 0.05;
-        }
-        let spent = await doManageDivision(ns, division, divisionalBudget);
-        if (spent) budget -= spent;
-    }
+/** @param {NS} ns */
+async function corpFunds(ns) {
+  const corp = await proxy(ns, "corporation.getCorporation")
+  return corp.funds
 }
-
-/**
- * Try to raise money.
- * Advances through the funding rounds, eventually going public. Potentially spends hacknet hashes for money.
- * @param {NS} ns
- */
-async function tryRaiseCapital(ns) {
-    // First, spend hacknet hashes.
-    if (options['can-spend-hashes'] && myCorporation.funds < 10e9) 
-        await doSpendHashes(ns, 'Sell for Corporation Funds');
-    // If we're not public, then raise private funding.
-    if (!myCorporation.public) {
-        let offer = ns.corporation.getInvestmentOffer();
-        // If we've finished round 4, clear our raising capital flag.
-        if (offer.round > 4) raisingCapital = 0;
-        let willAccept = true;
-        if (offer && offer.round <= 4) {
-            log(ns, `Considering raising private capital round ${offer.round}. Offered ${mf(offer.funds)} for ${nf(offer.shares)} shares.`);
-
-            // Make sure all employees are happy.
-            let satisfied = allEmployeesSatisfied(ns);
-            if (!satisfied) {
-                let prefix = '    *';
-                if (!willAccept) prefix = '     ';
-                log(ns, `${prefix}  Round ${offer.round} financing waiting on employee stats to stabilize.`);
-                willAccept = false;
-            }
-
-            // Make sure we have filled a reasonable amount of our warehouses with materials.
-            for (const division of getCorpDivisions(ns)) {
-                let industry = getIndustry(division);
-                for (const city of division.cities) {
-                    let warehouse = ns.corporation.getWarehouse(division.name, city);
-                    let warehouseSpaceRequiredForCycle = getReservedWarehouseSpace(ns, industry, division, city);
-                    let warehouseSpaceAvailable = warehouse.size - warehouseSpaceRequiredForCycle - warehouse.sizeUsed;
-                    if (warehouseSpaceAvailable > warehouseSpaceRequiredForCycle * 0.2) {
-                        let prefix = '    *';
-                        if (!willAccept) prefix = '     ';
-                        log(ns, `${prefix}  Round ${offer.round} financing waiting on ${division.name} warehouses to gain materials.`);
-                        willAccept = false;
-                        break;
-                    }
-                }
-            }
-            // If we have a product division, make sure it has a maximum number of products before we accept the offer.
-            for (const division of getCorpDivisions(ns)) {
-                const maxProducts = getMaxProducts(ns, division.name);
-                let industry = getIndustry(division);
-                if (industry.makesProducts && division.products.length < maxProducts) {
-                    let prefix = '    *';
-                    if (!willAccept) prefix = '     ';
-                    log(ns, `${prefix}  Round ${offer.round} financing waiting on ${division.name} division to create products (${division.products.length}/${maxProducts})`);
-                    willAccept = false;
-                }
-                if (offer.round >= 4 && industry.makesProducts) {
-                    // Wait for the last product to finish researching
-                    let completeProducts = division.products.map((prodName) => getProduct(ns, division.name, prodName, getDivisionProductCity(division))).filter((prod) => prod.developmentProgress >= 100);
-                    if (completeProducts.length < maxProducts) {
-                        let prefix = '    *';
-                        if (!willAccept) prefix = '     ';
-                        log(ns, `${prefix}  Round ${offer.round} financing waiting on ${division.name} division to complete products (${completeProducts.length}/${maxProducts})`);
-                        willAccept = false;
-                    }
-                }
-            }
-            // TODO: Funding is proportional to revenue. We can cook the books so that revenue looks higher than it should by stockpiling goods, then selling them all at once.
-
-            // Make sure we aren't spending money on materials when we get funding. Each time we come through the loop and would purchase, increment the counter. After 4 times, purchase.
-            if (willAccept) raisingCapital++;
-            else raisingCapital = 0;
-
-            // If we've passed all the checks, then accept the next round of funding.
-            if (options['can-accept-funding'] && raisingCapital > 4 && !options.mock) {
-                let success = ns.corporation.acceptInvestmentOffer();
-                raisingCapital = 0;
-                if (success) log(ns, `WARNING: Accepted round ${offer.round} funding. Took ${mf(offer.funds)} for ${nf(offer.shares)} shares.`);
-                else log(ns, `ERROR: Tried to accept round ${offer.round} funding, but something went wrong.`);
-            } else if (options['can-accept-funding'] && raisingCapital > 0) {
-                log(ns, `SUCCESS: Raising capital in ${5 - raisingCapital} cycles.`);
-            }
-        } else {
-            // We're public, so we can't be raising capital.
-            raisingCapital = 0;
+/** @param {NS} ns */
+async function prep(ns) {
+  investOffer = await proxy(ns, "corporation.getInvestmentOffer")
+  const round = investOffer.round
+  if (round >= 1) {
+    if (!hasDivDB[div1]) {
+      let division1 = await proxy(ns, "corporation.getDivision", div1)
+      if (division1)
+        hasDivDB[div1] = division1
+      else {
+        await proxy(ns, "corporation.expandIndustry", "Agriculture", div1)
+        division1 = await proxy(ns, "corporation.getDivision", div1)
+        if (division1)
+          hasDivDB[div1] = division1
+      }
+    }
+    for (const city of cities) {
+      if (!hasOfficeDB[div1 + city]) {
+        await proxy(ns, "corporation.expandCity", div1, city)
+        if (await proxy(ns, "corporation.getOffice", div1, city))
+          hasOfficeDB[div1 + city] = true
+      }
+      if (!hasWarehouseDB[div1 + city]) {
+        await proxy(ns, "corporation.purchaseWarehouse", div1, city)
+        const warehouse = await proxy(ns, "corporation.hasWarehouse", div1, city)
+        if (warehouse)
+          hasWarehouseDB[div1 + city] = warehouse
+      }
+    }
+  }
+  if (round >= 2) {
+    if (!researchedDB["Export"]) {
+      await proxy(ns, "corporation.purchaseUnlock", "Export")
+      if (await proxy(ns, "corporation.hasUnlock", "Export"))
+        researchedDB["Export"] = true
+    }
+    if (researchedDB["Export"]) {
+      if (!hasDivDB[div2]) {
+        let division2 = await proxy(ns, "corporation.getDivision", div2)
+        if (division2)
+          hasDivDB[div2] = division2
+        else {
+          await proxy(ns, "corporation.expandIndustry", "Chemical", div2)
+          division2 = await proxy(ns, "corporation.getDivision", div2)
+          if (division2)
+            hasDivDB[div2] = division2
         }
-        // Finally, if we're out of private funding, we may as well go public
-        offer = ns.corporation.getInvestmentOffer();
-        if (options['can-go-public'] && !options.mock && offer.round > 4) {
-            // Looks like we're out of private funding. Time to go public.
-            log(ns, `SUCCESS: Private funding complete. Time to IPO. Selling ${options['issue-shares']} shares.`);
-            ns.corporation.goPublic(options['issue-shares']);
-            // and set our dividend to 10%
-            ns.corporation.issueDividends(0.1);
-        }
-    } else {
-        // We're public, so we can't be raising capital.
-        raisingCapital = 0;
-    }
-}
-
-/**
- * Do all employees have enough happiness, energy, and morale?
- * @param {NS} ns
- * @param {number} lowerLimit - minimum for all stats [0,1]
- * @returns {boolean}
- */
-function allEmployeesSatisfied(ns, lowerLimit = 0.9995) {
-    let allSatisfied = true;
-    for (const division of getCorpDivisions(ns)) {
-        for (const city of division.cities) {
-            let office = ns.corporation.getOffice(division.name, city);
-            if (office.numEmployees === 0) continue;
-            if (office.avgEnergy < office.maxEnergy * lowerLimit || office.avgMorale < office.maxMorale * lowerLimit) {
-                allSatisfied = false;
-                break;
-            }
-        }
-    }
-    return allSatisfied;
-}
-
-/**
- * Given a list of tasks, execute them in order.
- * @param {NS} ns
- * @param {Task[]} tasks
- * @param {number} budget
- * @param {boolean} keepSpending Should we keep spending money on items further down the list after hitting an item we can't afford?
- * @returns {number} the amount spent.
- */
-async function runTasks(ns, tasks, budget, keepSpending = true) {
-    const startingBudget = budget;
-    for (const task of tasks) {
-        let success = false;
-        if (budget - task.cost > 0) {
-            log(ns, `  Spending ${mf(task.cost)} on ${task.name}`);
-            // Some of the ns.corporation calls we use are void functions, so treat a return value of undefined with no exception as a success.
-            if (!options.mock)
-                try {
-                    success = await task.run();
-                    if (success == undefined) success = true;
-                } catch (e) {
-                    log(ns, `WARNING: Failed to execute ${task.name} - ${task.run}`);
-                    log(ns, `WARNING: ${e}`);
-                }
-            if (success) budget -= task.cost;
-        }
-        if (!success && !keepSpending) break;
-    }
-    return startingBudget - budget;
-}
-
-/** @param {NS} ns **/
-async function doInitialCorporateSetup(ns) {
-    // No corporation yet, so create one. Try for a publicly funded corporation first (Only works in BN 3).
-    if (options.mock) {
-        log(ns, `Would like to create a corporation, but cannot because we are in mock mode. Nothing else to do.`);
-        ns.exit();
-    }
-    let created = false;
-    try {
-        created = ns.corporation.createCorporation(options['corporation-name'], false);
-        if (created)
-            log(ns, `Founded seed-funded corporation ${options['corporation-name']}!`, 'info', true);
-    } catch (err) {
-        if (verbose) log(ns, `Seed-funded corporation creation unavailable: ${err}`);
-    }
-    if (!created) {
-        let playerMoney = ns.getPlayer().money;
-        let stockValue = await getStocksValue(ns);
-        if (playerMoney < 150e9 && playerMoney + stockValue >= 150e9) {
-            const pid = ns.run(getFilePath('stockmaster.js'), 1, '--liquidate');
-            if (!pid) {
-                ns.tprint(`ERROR: Could not launch stockmaster.js --liquidate to fund corporation. ` +
-                    `Need ${mf(150e9)}, cash ${mf(playerMoney)}, stocks ${mf(stockValue)}.`);
-                ns.exit();
-            }
-            log(ns, `Liquidating stocks to found self-funded corporation. Need ${mf(150e9)}, cash ${mf(playerMoney)}, stocks ${mf(stockValue)}.`, 'info', true);
-            while (ns.isRunning(pid))
-                await ns.sleep(100);
-            playerMoney = ns.getPlayer().money;
-            stockValue = await getStocksValue(ns);
-        }
-        if (playerMoney >= 150e9) {
-            created = ns.corporation.createCorporation(options['corporation-name'], true);
-            if (created)
-                log(ns, `Founded self-funded corporation ${options['corporation-name']} for ${mf(150e9)}!`, 'info', true);
-        } else {
-            ns.tprint(`No corporation exists and self-funding is not affordable. Need ${mf(150e9)}, ` +
-                `have cash ${mf(playerMoney)}, stocks ${mf(stockValue)}, net ${mf(playerMoney + stockValue)}.`);
-            ns.tprint(`Exiting to free corporation API RAM; rerun when funding is available.`);
-            ns.exit();
-        }
-    }
-    if (!created) {
-        ns.tprint(`ERROR: Failed to create corporation even though bootstrap appeared available. Exiting.`);
-        ns.exit();
-    }
-}
-
-/**
- * Create a bare bones new division, then use any remaining money to set it up.
- * @param {NS} ns
- * @param {*} newIndustry
- * @param {number} newDivisionBudget
- * @returns {boolean} true if we created the new division, false if not.
- */
-async function doCreateNewDivision(ns, newIndustry, newDivisionBudget) {
-    if (options['no-expansion'] || options['mock']) return false;
-    myCorporation = ns.corporation.getCorporation();
-    let numDivisions = myCorporation.divisions.length;
-
-    ns.corporation.expandIndustry(newIndustry.name, newIndustry.name);
-
-    myCorporation = ns.corporation.getCorporation();
-    if (numDivisions === myCorporation.divisions.length) {
-        log(ns, `ERROR: Failed to create new division! Expected to create '${newIndustry.name}'.`, 'error', true);
-        ns.exit();
-    }
-    newDivisionBudget -= newIndustry.startupCost;
-    if (verbose) log(ns, `Spending ${mf(newIndustry.startupCost)} setting up a new '${newIndustry.name}' division.`);
-    let newDivision = ns.corporation.getDivision(newIndustry.name);
-
-    // Hire the first three employees in Sector-12
-    fillSpaceQueue.push(`${newDivision.name}/Sector-12`);
-
-    // Do the first round of purchasing now.
-    await doManageDivision(ns, newDivision, newDivisionBudget);
-    if (newDivision) return true;
-    else return false;
-}
-
-/**
- * Given an existing division, try to allocate our budget to growing the business.
- * @param {NS} ns
- * @param {Division} division division from ns.corporation.getDivision()
- * @param {number} budget amount we can spend
- * @returns {number} the amount we spent while managing this division.
- */
-async function doManageDivision(ns, division, budget) {
-    myCorporation = ns.corporation.getCorporation();
-    const industry = getIndustry(division);
-    budget = Math.max(0, budget);
-    const totalBudget = budget;
-
-    // We can't do much here without both the office and warehouse api.
-    for (const api of ['Warehouse API', 'Office API']) {
-        if (!hasUnlock(ns, api)) {
-            if (verbose) log(ns, `Cannot manage division ${division.name} without unlocking '${api}'`);
-            return 0;
-        }
-    }
-    /**
-     * Take stock of the current state of this division. Just like at the corporate level,
-     * collect some tasks that we'd like to do, then see what we can execute. Don't worry too
-     * much about spending the whole budget. Anything we don't spend now will get passed on
-     * to other divisions, or recycled in the next pass.
-     */
-    if (verbose) log(ns, '');
-    if (verbose) log(ns, `Managing ${division.name} division with a budget of ${mf(budget)}.`);
-    let spent = 0;
-    let tasks = [];
-
-    // Can we expand to new cities?
-    if (division.cities.length < cities.length) {
-        // We aren't in all cities yet, so we want to expand.
+      }
+      if (hasDivDB[div2]) {
         for (const city of cities) {
-            if (!division.cities.includes(city)) {
-                let cost = getCorpConstants(ns).officeInitialCost;
-                if (cost < budget * 0.25) {
-                    if (verbose) log(ns, `Want to open new offices in ${city}.`);
-                    tasks.push(new Task(`Expand ${division.name} to ${city}`, () => doExpandCity(ns, division.name, city), cost, 80));
-                } else if (verbose) log(ns, `WARNING: We would like to expand to ${city}, but it would cost ${mf(cost)} on our budget of ${mf(budget)}.`);
-            }
+          if (!hasOfficeDB[div2 + city]) {
+            await proxy(ns, "corporation.expandCity", div2, city)
+            if (await proxy(ns, "corporation.getOffice", div2, city))
+              hasOfficeDB[div2 + city] = true
+          }
+          if (!hasWarehouseDB[div2 + city]) {
+            await proxy(ns, "corporation.purchaseWarehouse", div2, city)
+            if (await proxy(ns, "corporation.hasWarehouse", div2, city))
+              hasWarehouseDB[div2 + city] = true
+          }
         }
+      }
     }
-    // Go ahead and expand immediately, so we can buy other stuff for any new locations on this cycle.
-    if (tasks.length > 0) {
-        spent = await runTasks(ns, tasks, budget);
-        budget -= spent;
-        tasks = [];
+  }
+  if (round >= 3) {
+    if (!researchedDB["Market Research - Demand"]) {
+      await proxy(ns, "corporation.purchaseUnlock", "Market Research - Demand")
+      if (await proxy(ns, "corporation.hasUnlock", "Market Research - Demand"))
+        researchedDB["Market Research - Demand"] = true
     }
-    // Update our status
-    myCorporation = ns.corporation.getCorporation();
-    division = ns.corporation.getDivision(division.name);
-    let hasMarketTA2 = ns.corporation.hasResearched(division.name, 'Market-TA.II');
-
-    // Division wide tasks
-    // Can we buy advertising? This is how we go exponential in our production industry.
-    let adCount = ns.corporation.getHireAdVertCount(division.name);
-    let adPrice = ns.corporation.getHireAdVertCost(division.name);
-    if (industry.makesProducts && adPrice < budget * 0.9) {
-        tasks.push(new Task(`Buy advertising campaign #${adCount + 1} for ${division.name}`, () => ns.corporation.hireAdVert(division.name), adPrice, 60));
-        adCount++;
+    if (!researchedDB["Market Data - Competition"]) {
+      await proxy(ns, "corporation.purchaseUnlock", "Market Data - Competition")
+      if (await proxy(ns, "corporation.hasUnlock", "Market Data - Competition"))
+        researchedDB["Market Data - Competition"] = true
     }
-    // Buy the first advertising campaign for non-product industries
-    if (adCount == 0 && !industry.makesProducts && adPrice < budget * 0.9) {
-        // Buy one advertising campaign in material markets
-        tasks.push(new Task(`Buy advertising campaign #${adCount + 1} for ${division.name}`, () => ns.corporation.hireAdVert(division.name), adPrice, 60));
+    if (!hasDivDB[div3] && researchedDB["Market Research - Demand"] && researchedDB["Market Data - Competition"]) {
+      let division3 = await proxy(ns, "corporation.getDivision", div3)
+      if (division3)
+        hasDivDB[div3] = division3
+      else {
+        await proxy(ns, "corporation.expandIndustry", "Tobacco", div3)
+        division3 = await proxy(ns, "corporation.getDivision", div3)
+        if (division3)
+          hasDivDB[div3] = division3
+      }
     }
-    // Consider buying more advertising. All industires with MarketTA2, or a second one for production industries.
-    if ((industry.makesProducts || hasMarketTA2) && adPrice < budget * 0.5) {
-        tasks.push(new Task(`Buy advertising campaign #${adCount + 1} for ${division.name}`, () => ns.corporation.hireAdVert(division.name), adPrice, 20));
-    }
-
-    // Should we spend any research?
-    let researchToSpend = getDivisionResearch(division);
-    if (industry.makesProducts || hasMarketTA2) {
-        // Willing to spend in inverse proportion to how much stored science helps this product.
-        researchToSpend = getDivisionResearch(division) * (1 - industry.factors.Science);
-    }
-    let researchTypes = ['Hi-Tech R&D Laboratory', 'uPgrade: Fulcrum', 'uPgrade: Capacity.I', 'uPgrade: Capacity.II', 'Market-TA.I', 'Market-TA.II'];
-    for (const researchType of researchTypes) {
-        let hasResearch = false;
-        let cost = Infinity;
-        try {
-            hasResearch = ns.corporation.hasResearched(division.name, researchType);
-            cost = ns.corporation.getResearchCost(division.name, researchType);
-        } catch {}
-        if (!hasResearch && researchToSpend >= cost) {
-            log(ns, `INFO: Buying reasearch project ${researchType} for ${nf(cost)} research points.`, 'info');
-            ns.corporation.research(division.name, researchType);
-            researchToSpend -= cost;
-        } else if (!hasResearch && cost !== Infinity) {
-            if (verbose) log(ns, `Considered spending up to ${nf(researchToSpend)} of ${nf(getDivisionResearch(division))} research on '${researchType}' but it would cost ${nf(cost)}.`);
-            // If we don't have this research, and can't afford to buy it, don't buy the next item on the list
-            break;
+    if (hasDivDB[div3]) {
+      for (const city of cities) {
+        if (!hasOfficeDB[div3 + city]) {
+          await proxy(ns, "corporation.expandCity", div3, city)
+          if (await proxy(ns, "corporation.getOffice", div3, city))
+            hasOfficeDB[div3 + city] = true
         }
+        if (!hasWarehouseDB[div3 + city]) {
+          await proxy(ns, "corporation.purchaseWarehouse", div3, city)
+          if (await proxy(ns, "corporation.hasWarehouse", div3, city))
+            hasWarehouseDB[div3 + city] = true
+        }
+      }
     }
-
-    // If this is a production industry, see if we should be researching a new product.
-    if (industry.makesProducts) {
-        const maxProducts = getMaxProducts(ns, division.name);
-        let products = division.products.map((p) => getProduct(ns, division.name, p, getDivisionProductCity(division)));
-        let progress = products.map((p) => p.developmentProgress).filter((cmp) => cmp < 100)[0];
-        if (progress == undefined) progress = 100;
-        if (verbose) log(ns, `Projects: ${products.length}/${maxProducts}. Current project: ${nf(progress)}% complete.`);
-        if (progress === 100) {
-            // No product being researched. Consider creating a new one.
-            if (products.length < maxProducts) {
-                // We're not full, so go ahead.
-                spent += createNewProduct(ns, division);
-                budget -= spent;
-            } // Discontinue an existing product for a new one if we're not raising capital.
-            else {
-                // log(ns, `Considering creating a new product. rC: ${raisingCapital} eR: ${mf(extraReserve)}`);
-                if (raisingCapital === 0) {
-                    if (extraReserve > 0 && myCorporation.funds > extraReserve) {
-                        // We have enough money saved up. Time to ditch the product with the lowest budget.
-                        products.sort((a, b) => budgetFromProductName(a.name) - budgetFromProductName(b.name));
-                        let lowBudgetProduct = products[0];
-                        ns.corporation.discontinueProduct(division.name, lowBudgetProduct.name);
-                        myCorporation = ns.corporation.getCorporation();
-                    }
-                    // Try to create the Product. If it fails, it will set a reserve for us.
-                    spent += createNewProduct(ns, division);
-                    budget -= spent;
-                }
-            }
-        }
+  }
+  if (round >= 5) {
+    let division4 = await proxy(ns, "corporation.getDivision", div4)
+    if (division4)
+      hasDivDB[div4] = division4
+    else {
+      await proxy(ns, "corporation.expandIndustry", "Restaurant", div4)
+      division4 = await proxy(ns, "corporation.getDivision", div4)
+      if (division4)
+        hasDivDB[div4] = division4
     }
-
-    // Per city tasks.
-    for (const city of division.cities) {
-        // Can we expand any of our offices for more employees?
-        let officeSize = ns.corporation.getOffice(division.name, city).size;
-        let seats = 15; // Grow by officeSize when small, then by 15
-        seats = Math.min(seats, officeSize);
-        let cost = ns.corporation.getOfficeSizeUpgradeCost(division.name, city, seats);
-        if (industry.makesProducts && city === hqCity && cost < budget * 0.9) {
-            tasks.push(new Task(`Buy space for ${seats} more employees of ${division.name}/${city}`, () => upgradeOfficeSize(ns, division.name, city, seats), cost, 70));
-        } else if (industry.makesProducts && city !== hqCity && cost < budget * 0.1) {
-            tasks.push(new Task(`Buy space for ${seats} more employees of ${division.name}/${city}`, () => upgradeOfficeSize(ns, division.name, city, seats), cost, 70));
-        } else if (!industry.makesProducts && cost < budget * 0.4) {
-            tasks.push(new Task(`Buy space for ${seats} more employees of ${division.name}/${city}`, () => upgradeOfficeSize(ns, division.name, city, seats), cost, 70));
-        }
-
-        // Can we expand our warehouse space?
-        if (!ns.corporation.hasWarehouse(division.name, city)) {
-            // We don't have a warehouse here. We should try to buy one in this city.
-            cost = getCorpConstants(ns).warehouseInitialCost;
-            if (cost < budget * 0.5) {
-                tasks.push(new Task(`Buy warehouse ${division.name}/${city}`, () => ns.corporation.purchaseWarehouse(division.name, city), cost, 80));
-            }
-            // Anything else we want to do with a city requires a warehouse, so just skip to the next city.
-            continue;
-        }
-
-        // We have a warehouse. Can we expand it?
-        let warehouse = ns.corporation.getWarehouse(division.name, city);
-        // TODO: How much do we care about expanding the warehouse? We should base it on how much of an impact more materials would have.
-        cost = ns.corporation.getUpgradeWarehouseCost(division.name, city);
-        if (cost < budget * 0.25) {
-            tasks.push(new Task(`Buy warehouse space for ${division.name}/${city}`, () => ns.corporation.upgradeWarehouse(division.name, city), cost, 20));
-        }
-
-        // Turn on Smart Supply if we have it
-        if (hasUnlock(ns, 'Smart Supply') && !warehouse.smartSupplyEnabled) {
-            try {
-                if (verbose) log(ns, `Turning on Smart Supply for ${division.name}/${city}.`);
-                ns.corporation.setSmartSupply(division.name, city, true);
-            } catch (e) {
-                log(ns, `ERROR: ${e}`);
-            }
-        } else if (!hasUnlock(ns, 'Smart Supply')) {
-            // Try to emulate Smart Supply if we don't have it.
-            // TODO: I don't think this is working.
-            for (const requiredMaterialName in industry.reqMats) {
-                let amtPerProduct = industry.reqMats[requiredMaterialName];
-                let amtRequiredMaterial = 0;
-                for (const producedMaterialName of industry.prodMats) {
-                    let producedMaterial = ns.corporation.getMaterial(division.name, city, producedMaterialName);
-                    let lastProduced = producedMaterial.productionAmount;
-                    if (lastProduced < 1) lastProduced = 1 * getDivisionProductionMult(division);
-                    amtRequiredMaterial += lastProduced * amtPerProduct;
-                }
-                for (const productName of division.products) {
-                    let lastProduced = getProductCityStats(ns, division.name, productName, city).produced;
-                    if (lastProduced < 1) lastProduced = 1 * getDivisionProductionMult(division);
-                    amtRequiredMaterial += lastProduced * amtPerProduct;
-                }
-                const requiredMaterial = ns.corporation.getMaterial(division.name, city, requiredMaterialName);
-                amtRequiredMaterial -= requiredMaterial.stored;
-                amtRequiredMaterial = Math.max(0, amtRequiredMaterial);
-                amtRequiredMaterial *= 10; // Produce 10 times per cycle
-                // Set the buy amount for this city based on our calculations.
-                ns.corporation.buyMaterial(division.name, city, requiredMaterialName, amtRequiredMaterial);
-            }
-        }
-
-        // Can we buy more materials given the space we currently have?
-        // First, wait to cycle around to 'START' so we have a clean read on the warehouse levels.
-        await sleepWhileNotInStartState(ns);
-        // Calculate the required free space for a production cycle's worth of Material and products.
-        let warehouseSpaceRequiredForCycle = getReservedWarehouseSpace(ns, industry, division, city);
-
-        // We don't want to drive the corp too deeply negative with material purchases too soon, or 
-        // else nothing else will ever be bought, and employees will never get happy.
-        let freeSpace = warehouse.size - warehouse.sizeUsed;
-        let warehouseSpaceAvailable = freeSpace - warehouseSpaceRequiredForCycle;
-        let tolerance = warehouseSpaceRequiredForCycle * 0.01;
-        let enoughSpace = warehouseSpaceAvailable >= tolerance; // Tiny safety margin
-        const satisfied = allEmployeesSatisfied(ns);
-        if ((budget > 0 || satisfied) && enoughSpace && raisingCapital === 0) {
-            // We have a decent amount of space to fill.
-            if (verbose) log(ns, `   ${division.name}/${city} warehouse: Wants +${nf(warehouseSpaceAvailable)} m² materials. ${nf(warehouseSpaceRequiredForCycle)} m² reserved.`);
-            for (const material of bonusMaterials) {
-                //if (industry.prodMats.includes(material)) continue; // Don't buy the materials we make.
-                let amt = (industry.scaledMaterialBonus[material] * warehouseSpaceAvailable) / 4;
-                // somewhat scale the amount we buy with our budget
-                let scaleFactor = Math.log10(budget) - 11; // Don't go full speed until our budget is $100b or more.
-                scaleFactor = Math.max(-2, scaleFactor);
-                scaleFactor = Math.min(0, scaleFactor);
-                let scale = Math.pow(10, scaleFactor);
-                // Only scale if we're waiting on employees to get happy.
-                if (!satisfied) amt = scale * amt;
-                ns.corporation.buyMaterial(division.name, city, material, amt);
-            }
-        } else {
-            // Make sure we're not buying anything -- we're either out of room or out of money.
-            for (const material of bonusMaterials) {
-                ns.corporation.buyMaterial(division.name, city, material, 0);
-            }
-        }
-        // It's possible to get into a situation where we've grown production faster than warehouse space.
-        if (warehouseSpaceAvailable < -tolerance) {
-            // Start clearing things out.
-            if (verbose) log(ns, `   ${division.name}/${city} warehouse: Wants to reserve ${nf(warehouseSpaceRequiredForCycle)} of ${nf(warehouse.size)} m², but only ${nf(freeSpace)} m² free! Selling some materials.`);
-            for (const material of allMaterials) {
-                let materialInfo = ns.corporation.getMaterial(division.name, city, material);
-                let amt = materialInfo.stored;
-                let sellAmt = amt * 0.025;
-                ns.corporation.sellMaterial(division.name, city, material, sellAmt.toFixed(2), 'MP*0.80');
-            }
-        } else {
-            // Make sure we reset. It should be safe to sell '0' here, because the things we want to sell will get reset in the price discovery loop.
-            for (const material of allMaterials) {
-                ns.corporation.sellMaterial(division.name, city, material, '0', 'MP');
-            }
-        }
+    for (const city of cities) {
+      if (!hasOfficeDB[div4 + city]) {
+        await proxy(ns, "corporation.expandCity", div4, city)
+        if (await proxy(ns, "corporation.getOffice", div4, city))
+          hasOfficeDB[div4 + city] = true
+      }
+      if (!hasWarehouseDB[div4 + city]) {
+        await proxy(ns, "corporation.purchaseWarehouse", div4, city)
+        if (await proxy(ns, "corporation.hasWarehouse", div4, city))
+          hasWarehouseDB[div4 + city] = true
+      }
     }
-    // Figure out which tasks we can afford to run, and in which order.
-    tasks.sort((a, b) => a.cost - b.cost).reverse();
-    tasks.sort((a, b) => a.priority - b.priority).reverse();
-    // Finally, run all the tasks we've collected.
-    spent += await runTasks(ns, tasks, budget);
-    if (spent > 0 && verbose) log(ns, `Spent ${mf(spent)} of our budget of ${mf(totalBudget)}.`);
-
-    return spent;
+    const corp = await proxy(ns, "corporation.getCorporation")
+    if (corp.valuation >= 100e12) {
+      if (!researchedDB["Government Partnership"]) {
+        await proxy(ns, "corporation.purchaseUnlock", "Government Partnership")
+        if (await proxy(ns, "corporation.hasUnlock", "Government Partnership"))
+          researchedDB["Government Partnership"] = true
+      }
+      if (!researchedDB["Shady Accounting"]) {
+        await proxy(ns, "corporation.purchaseUnlock", "Shady Accounting")
+        if (await proxy(ns, "corporation.hasUnlock", "Shady Accounting"))
+          researchedDB["Shady Accounting"] = true
+      }
+      if (!corp.public) {
+        await proxy(ns, "corporation.goPublic", 0)
+        await proxy(ns, "corporation.issueDividends", 0.1)
+      }
+    }
+    if (corp.revenue >= 1e24) {
+      let division5 = await proxy(ns, "corporation.getDivision", div5)
+      if (division5)
+        hasDivDB[div5] = await proxy(ns, "corporation.getDivision", div5)
+      else {
+        await proxy(ns, "corporation.expandIndustry", "Water Utilities", div5)
+        division5 = await proxy(ns, "corporation.getDivision", div5)
+        if (division5)
+          hasDivDB[div5] = await proxy(ns, "corporation.getDivision", div5)
+      }
+      let division6 = await proxy(ns, "corporation.getDivision", div6)
+      if (division6)
+        hasDivDB[div6] = await proxy(ns, "corporation.getDivision", div6)
+      else {
+        await proxy(ns, "corporation.expandIndustry", "Computer Hardware", div6)
+        division6 = await proxy(ns, "corporation.getDivision", div6)
+        if (division6)
+          hasDivDB[div6] = await proxy(ns, "corporation.getDivision", div6)
+      }
+      let division7 = await proxy(ns, "corporation.getDivision", div7)
+      if (division7)
+        hasDivDB[div7] = await proxy(ns, "corporation.getDivision", div7)
+      else {
+        await proxy(ns, "corporation.expandIndustry", "Refinery", div7)
+        division7 = await proxy(ns, "corporation.getDivision", div7)
+        if (division7)
+          hasDivDB[div7] = await proxy(ns, "corporation.getDivision", div7)
+      }
+      let division8 = await proxy(ns, "corporation.getDivision", div8)
+      if (division8)
+        hasDivDB[div8] = await proxy(ns, "corporation.getDivision", div8)
+      else {
+        await proxy(ns, "corporation.expandIndustry", "Mining", div8)
+        division8 = await proxy(ns, "corporation.getDivision", div8)
+        if (division8)
+          hasDivDB[div8] = await proxy(ns, "corporation.getDivision", div8)
+      }
+      for (const city of cities) {
+        //Set up divs
+        const divs = [div5, div6, div7, div8]
+        for (const div of divs) {
+          if (!hasOfficeDB[div + city]) {
+            await proxy(ns, "corporation.expandCity", div, city)
+            if (await proxy(ns, "corporation.getOffice", div, city))
+              hasOfficeDB[div + city] = true
+          }
+          if (!hasWarehouseDB[div + city]) {
+            await proxy(ns, "corporation.purchaseWarehouse", div, city)
+            if (await proxy(ns, "corporation.hasWarehouse", div, city))
+              hasWarehouseDB[div + city] = true
+          }
+        }
+      }
+    }
+  }
 }
+/** @param {NS} ns */
+async function updateMisc(ns) {
+  const round = investOffer.round
+  let corp = await proxy(ns, "corporation.getCorporation")
+  const mult = round === 3 ? 3 : 2.5
+  let hasDiv4 = false
+  let hasDiv3 = false
+  let div3Count = 0
+  for (const city of cities)
+    if (hasWarehouseDB[div3 + city])
+      div3Count++
+  if (div3Count === 6) hasDiv3 = true
 
-/**
- * How much space do we need to leave fee in this warehouse for a full cycle of production?
- * @param {NS} ns
- * @param {Industry} industry
- * @param {Division} division
- * @param {string} city
- * @returns {number}
- */
-function getReservedWarehouseSpace(ns, industry, division, city) {
-    let rawMaterialSize = 0;
-    let warehouseSpaceRequiredForCycle = 0;
-    let maxProd = 0;
 
-    // Products take the same space as what was used to create it.
-    for (const matName in industry.reqMats) {
-        let matAmt = industry.reqMats[matName];
-        rawMaterialSize += matAmt * materialSizes[matName];
+  let div4Count = 0
+  for (const city of cities)
+    if (hasWarehouseDB[div4 + city])
+      div4Count++
+  if (div4Count === 6) hasDiv4 = true
+
+  if (round === 3 && !hasDiv3) return
+  const division3 = await proxy(ns, "corporation.getDivision", div3)
+  const division4 = await proxy(ns, "corporation.getDivision", div4)
+  if (round >= 3
+    && await proxy(ns, "corporation.getUpgradeLevelCost", "Wilson Analytics") < corp.funds
+    && (((round >= 5)
+      && (hasDiv4
+        && (division4.awareness < Number.MAX_VALUE
+          || division4.popularity < Number.MAX_VALUE)))
+      || (hasDiv3
+        && (division3.awareness < Number.MAX_VALUE
+          || division3.popularity < Number.MAX_VALUE)))) {
+    await proxy(ns, "corporation.levelUpgrade", "Wilson Analytics")
+    corp = await proxy(ns, "corporation.getCorporation")
+  }
+  while ((round === 3)
+    && await proxy(ns, "corporation.getUpgradeLevelCost", "Wilson Analytics") < await corpFunds(ns)
+    && await proxy(ns, "corporation.getUpgradeLevel", "Wilson Analytics") < 2) {
+    await proxy(ns, "corporation.levelUpgrade", "Wilson Analytics")
+    corp = await proxy(ns, "corporation.getCorporation")
+  }
+  if (round < 5 && await proxy(ns, "corporation.getUpgradeLevelCost", "ABC SalesBots") * mult / 2 < corp.funds) {
+    await proxy(ns, "corporation.levelUpgrade", "ABC SalesBots")
+    corp = await proxy(ns, "corporation.getCorporation")
+  }
+  while (round >= 5 && await proxy(ns, "corporation.getUpgradeLevelCost", "ABC SalesBots") * mult / 2 < await corpFunds(ns))
+    await proxy(ns, "corporation.levelUpgrade", "ABC SalesBots")
+  corp = await proxy(ns, "corporation.getCorporation")
+  if ((round === 3 && corp.revenue >= 8e7) || round >= 4) {
+    if (await proxy(ns, "corporation.getUpgradeLevel", "Neural Accelerators") < 500 && await proxy(ns, "corporation.getUpgradeLevelCost", "Neural Accelerators") * mult < corp.funds) {
+      await proxy(ns, "corporation.levelUpgrade", "Neural Accelerators")
+      corp = await proxy(ns, "corporation.getCorporation")
     }
-
-    // Max production is based on a bunch of production multipliers.
-    maxProd = getMaximumProduction(ns, division, city);
-
-    // How many materials could we produce? Material sizes are predefined.
-    for (const matName of industry.prodMats) {
-        warehouseSpaceRequiredForCycle += materialSizes[matName] * maxProd;
+    if (await proxy(ns, "corporation.getUpgradeLevel", "Project Insight") < 500 && await proxy(ns, "corporation.getUpgradeLevelCost", "Project Insight") * mult < corp.funds) {
+      await proxy(ns, "corporation.levelUpgrade", "Project Insight")
+      corp = await proxy(ns, "corporation.getCorporation")
     }
-
-    if (industry.makesProducts) {
-        const maxProducts = getMaxProducts(ns, division.name);
-        warehouseSpaceRequiredForCycle += maxProducts * maxProd * rawMaterialSize;
+    if (await proxy(ns, "corporation.getUpgradeLevel", "Nuoptimal Nootropic Injector Implants") < 500 && await proxy(ns, "corporation.getUpgradeLevelCost", "Nuoptimal Nootropic Injector Implants") * mult < corp.funds) {
+      await proxy(ns, "corporation.levelUpgrade", "Nuoptimal Nootropic Injector Implants")
+      corp = await proxy(ns, "corporation.getCorporation")
     }
+    if (await proxy(ns, "corporation.getUpgradeLevel", "FocusWires") < 500 && await proxy(ns, "corporation.getUpgradeLevelCost", "FocusWires") * mult < corp.funds) {
+      await proxy(ns, "corporation.levelUpgrade", "FocusWires")
+      corp = await proxy(ns, "corporation.getCorporation")
+    }
+    if (await proxy(ns, "corporation.getUpgradeLevel", "Speech Processor Implants") < 500 && await proxy(ns, "corporation.getUpgradeLevelCost", "Speech Processor Implants") * mult < corp.funds) {
+      await proxy(ns, "corporation.levelUpgrade", "Speech Processor Implants")
+      corp = await proxy(ns, "corporation.getCorporation")
+    }
+  }
 
-    // We produce stuff 10 times per cycle
-    warehouseSpaceRequiredForCycle *= 10;
-
-    // If we don't have automatic price discovery, we'll need some extra free space.
-    let hasMarketTA2 = ns.corporation.hasResearched(division.name, 'Market-TA.II');
-    if (!hasMarketTA2) warehouseSpaceRequiredForCycle *= 3;
-    else warehouseSpaceRequiredForCycle *= 1.5;
-
-    return warehouseSpaceRequiredForCycle;
+  if (round >= 3 && round <= 4) {
+    for (const div of industries) {
+      if (!hasDivDB[div]) continue
+      if (!["Tobacco", "Restaurant"].includes(hasDivDB[div].type)) continue
+      const division = await proxy(ns, "corporation.getDivision", div)
+      if (corp.funds >= await proxy(ns, "corporation.getHireAdVertCost", div) * mult / 2
+        && (division.awareness < Number.MAX_VALUE || division.popularity < Number.MAX_VALUE)) {
+        await proxy(ns, "corporation.hireAdVert", div)
+        corp = await proxy(ns, "corporation.getCorporation")
+      }
+    }
+  }
+  if (round === 5) {
+    for (const div of industries) {
+      if (!hasDivDB[div]) continue
+      if (!["Tobacco", "Restaurant", "Computer Hardware"].includes(hasDivDB[div].type)) continue
+      const division = await proxy(ns, "corporation.getDivision", div)
+      while (await corpFunds(ns) >= await proxy(ns, "corporation.getHireAdVertCost", div) * mult / 2
+        && (division.awareness < Number.MAX_VALUE || division.popularity < Number.MAX_VALUE))
+        await proxy(ns, "corporation.hireAdVert", div)
+    }
+  }
 }
-
-function getMaximumProduction(ns, division, city) {
-    let office = ns.corporation.getOffice(division.name, city);
-    let officeMult = getOfficeProductivity(office); // Workers
-    let prodMult = getDivisionProductionMult(division); // Materials
-    let corpMult = 1 + 0.03 * ns.corporation.getUpgradeLevel('Smart Factories'); // Corporate upgrades.
-    let resMult = 1;
-    if (ns.corporation.hasResearched(division.name, 'Drones - Assembly')) resMult *= 1.2;
-    if (ns.corporation.hasResearched(division.name, 'Self-Correcting Assemblers')) resMult *= 1.1;
-    let maxProd = officeMult * prodMult * corpMult * resMult;
-    return maxProd;
+/** @param {NS} ns */
+async function getRP(ns, div) {
+  const division = await proxy(ns, "corporation.getDivision", div)
+  return division.researchPoints
 }
-
-/**
- * Try to create a new product for this division, with a budget at least twice the size of the last
- * one we bought. If we don't have enough money, or all our product slots are full,
- * then set a reserve for the desired amount.
- *
- * @param {NS} ns
- * @param {Division} division
- * @returns amount of money spent, if any.
- */
-function createNewProduct(ns, division) {
-    let wantToSpend = 2e9; // $2b minimum.
-    let spent = 0;
-    let spentOnProducts = [];
-    try {
-        spentOnProducts = division.products
-            .map((p) => budgetFromProductName(p))
-            .sort((a, b) => a - b)
-            .reverse();
-    } catch (error) {}
-    if (spentOnProducts.length > 0) {
-        // If our products weren't named correctly default to assuming they were 2b, 4b, 8b...
-        wantToSpend = wantToSpend * Math.pow(2, spentOnProducts.length - 1);
-        wantToSpend = Math.max(spentOnProducts[0] * 2, wantToSpend, myCorporation.revenue * 100);
+/** @param {NS} ns */
+async function spendRP(ns) {
+  for (const div of industries) {
+    if (!hasDivDB[div]) continue
+    switch (hasDivDB[div].type) {
+      case "Mining":
+      case "Refinery":
+      case "Computer Hardware":
+      case "Water Utilities":
+      case "Chemical":
+      case "Agriculture": {
+        if (!researchedDB[div + "Hi-Tech R&D Laboratory"]) {
+          if (await getRP(ns, div) / 2 > await proxy(ns, "corporation.getResearchCost", div, "Hi-Tech R&D Laboratory")) {
+            await proxy(ns, "corporation.research", div, "Hi-Tech R&D Laboratory")
+            researchedDB[div + "Hi-Tech R&D Laboratory"] = true
+          }
+          else break
+        }
+        if (!researchedDB[div + "Overclock"]) {
+          if (await getRP(ns, div) / 10 > await proxy(ns, "corporation.getResearchCost", div, "Overclock")) {
+            await proxy(ns, "corporation.research", div, "Overclock")
+            researchedDB[div + "Overclock"] = true
+          }
+          else break
+        }
+        if (!researchedDB[div + "Sti.mu"]) {
+          if (await getRP(ns, div) / 10 > await proxy(ns, "corporation.getResearchCost", div, "Sti.mu")) {
+            await proxy(ns, "corporation.research", div, "Sti.mu")
+            researchedDB[div + "Sti.mu"] = true
+          }
+          else break
+        }
+        if (!researchedDB[div + "Automatic Drug Administration"]) {
+          if (await getRP(ns, div) / 10 > await proxy(ns, "corporation.getResearchCost", div, "Automatic Drug Administration")) {
+            await proxy(ns, "corporation.research", div, "Automatic Drug Administration")
+            researchedDB[div + "Automatic Drug Administration"] = true
+          }
+          else break
+        }
+        if (!researchedDB[div + "Go-Juice"]) {
+          if (await getRP(ns, div) / 10 > await proxy(ns, "corporation.getResearchCost", div, "Go-Juice")) {
+            await proxy(ns, "corporation.research", div, "Go-Juice")
+            researchedDB[div + "Go-Juice"] = true
+          }
+          else break
+        }
+        if (!researchedDB[div + "CPH4 Injections"]) {
+          if (await getRP(ns, div) / 10 > await proxy(ns, "corporation.getResearchCost", div, "CPH4 Injections")) {
+            await proxy(ns, "corporation.research", div, "CPH4 Injections")
+            researchedDB[div + "CPH4 Injections"] = true
+          }
+          else break
+        }
+      }
+        break
+      case "Restaurant":
+      case "Tobacco": {
+        if (!researchedDB[div + "Hi-Tech R&D Laboratory"]) {
+          if (await getRP(ns, div) / 2 > await proxy(ns, "corporation.getResearchCost", div, "Hi-Tech R&D Laboratory")) {
+            await proxy(ns, "corporation.research", div, "Hi-Tech R&D Laboratory")
+            researchedDB[div + "Hi-Tech R&D Laboratory"] = true
+          }
+          else break
+        }
+        if (!researchedDB[div + "uPgrade: Fulcrum"]) {
+          if (await getRP(ns, div) / 10 > await proxy(ns, "corporation.getResearchCost", div, "uPgrade: Fulcrum")) {
+            await proxy(ns, "corporation.research", div, "uPgrade: Fulcrum")
+            researchedDB[div + "uPgrade: Fulcrum"] = true
+          }
+          else break
+          break
+        }
+        /*if (!researchedDB[div + "uPgrade: Capacity.I"]) {
+          if (await getRP(ns, div) / 10 > await proxy(ns, "corporation.getResearchCost", div, "uPgrade: Capacity.I")) {
+            await proxy(ns, "corporation.research", div, "uPgrade: Capacity.I")
+            researchedDB[div + "uPgrade: Capacity.I"] = true
+          }
+          else break
+          break
+        }
+        if (!researchedDB[div + "uPgrade: Capacity.II"]) {
+          if (await getRP(ns, div) / 10 > await proxy(ns, "corporation.getResearchCost", div, "uPgrade: Capacity.II")) {
+            await proxy(ns, "corporation.research", div, "uPgrade: Capacity.II")
+            researchedDB[div + "uPgrade: Capacity.II"] = true
+          }
+          else break
+          break
+        }
+        */
+        if (!researchedDB[div + "Self-Correcting Assemblers"]) {
+          if (await getRP(ns, div) / 10 > await proxy(ns, "corporation.getResearchCost", div, "Self-Correcting Assemblers")) {
+            await proxy(ns, "corporation.research", div, "Self-Correcting Assemblers")
+            researchedDB[div + "Self-Correcting Assemblers"] = true
+          }
+          else break
+          break
+        }
+        if (!researchedDB[div + "Drones"]) {
+          if (await getRP(ns, div) / 10 > await proxy(ns, "corporation.getResearchCost", div, "Drones")) {
+            await proxy(ns, "corporation.research", div, "Drones")
+            researchedDB[div + "Drones"] = true
+          }
+          else break
+          break
+        }
+        if (!researchedDB[div + "Drones - Assembly"]) {
+          if (await getRP(ns, div) / 10 > await proxy(ns, "corporation.getResearchCost", div, "Drones - Assembly")) {
+            await proxy(ns, "corporation.research", div, "Drones - Assembly")
+            researchedDB[div + "Drones - Assembly"] = false
+          }
+          else break
+          break
+        }
+        if (!researchedDB[div + "Drones - Transport"]) {
+          if (await getRP(ns, div) / 10 > await proxy(ns, "corporation.getResearchCost", div, "Drones - Transport")) {
+            await proxy(ns, "corporation.research", div, "Drones - Transport")
+            researchedDB[div + "Drones - Transport"] = true
+          }
+          else break
+          break
+        }
+      }
+        break
     }
-    let productname = `${getDivisionIndustryName(division)}-${Math.log10(wantToSpend).toFixed(2)}`;
-    try {
-        ns.corporation.makeProduct(division.name, getDivisionProductCity(division), productname, wantToSpend / 2, wantToSpend / 2);
-        log(ns, `Creating new product '${productname}' for ${mf(wantToSpend)}.`, 'info', true);
-        spent += wantToSpend;
-        extraReserve = 0;
-    } catch (e) {
-        // If we fail to create the product, just reserve the money we want to spend.
-        log(ns, `Reserving budget of ${mf(wantToSpend)} for next product.`);
-        extraReserve = wantToSpend;
-    }
-    return spent;
+  }
 }
+/** @param {NS} ns */
+async function manageProducts(ns) {
+  for (const div of industries) {
+    if (!hasDivDB[div]) continue
+    if (!hasDivDB[div].makesProducts) continue
+    let active = 0
+    let calculating = 0
+    let division = await proxy(ns, "corporation.getDivision", div)
+    for (const prod of division.products) {
+      const product = await proxy(ns, "corporation.getProduct", div, "Sector-12", prod)
+      if (product.developmentProgress === 100) {
+        const ta2 = ta2DB[div + "Sector-12" + prod]
+        if (ta2 !== undefined && ta2.markupLimit !== 0)
+          active++
+        else
+          calculating++
+      }
+    }
+    //Discontinue?
+    if (active + calculating === division.maxProducts && calculating <= 1) {
+      let worstProd = "none"
+      let worstRating = Infinity
+      for (const prod of division.products) {
+        const product = await proxy(ns, "corporation.getProduct", div, "Sector-12", prod)
+        if (product.developmentProgress != 100 || await getSellPrice(ns, div, "Sector-12", prod) === 0) continue
+        if (await getSellPrice(ns, div, "Sector-12", prod) < worstRating) {
+          worstProd = prod
+          worstRating = await getSellPrice(ns, div, "Sector-12", prod)
+        }
+      }
+      for (const city of cities)
+        delete ta2DB[div + city + worstProd]
+      await proxy(ns, "corporation.discontinueProduct", div, worstProd)
+      division = await proxy(ns, "corporation.getDivision", div)
+    }
+    //Discontinue?
+    else if (active + calculating === division.maxProducts && !tobaccoBooster) {
+      let worstProd = "none"
+      let worstRating = Infinity
+      for (const prod of division.products) {
+        const product = await proxy(ns, "corporation.getProduct", div, "Sector-12", prod)
+        if (product.developmentProgress === 100 && product.stats.quality < worstRating) {
+          worstProd = prod
+          worstRating = product.stats.quality
+        }
+      }
+      for (const city of cities)
+        delete ta2DB[div + city + worstProd]
+      await proxy(ns, "corporation.discontinueProduct", div, worstProd)
+      division = await proxy(ns, "corporation.getDivision", div)
+    }
+    let researching = false
+    if (division.products.length <= division.maxProducts) {
+      //Are we researching one?
+      for (const prod of division.products) {
+        const product = await proxy(ns, "corporation.getProduct", div, "Sector-12", prod)
+        if (product.developmentProgress < 100) {
+          researching = true
+          break
+        }
+      }
+    }
+    let prodname = "none:" + Math.random()
+    if (hasDivDB[div].type === "Tobacco") {
+      prodname = cigaretts[Math.floor(Math.random() * cigaretts.length)]
+      while (division.products.includes(prodname)) {
+        prodname = cigaretts[Math.floor(Math.random() * cigaretts.length)]
+      }
+    }
+    else if (hasDivDB[div].type === "Restaurant") {
+      prodname = burgers[Math.floor(Math.random() * burgers.length)]
+      while (division.products.includes(prodname)) {
+        prodname = burgers[Math.floor(Math.random() * burgers.length)]
+      }
+    }
+    else if (hasDivDB[div].type === "Computer Hardware") {
+      prodname = hardwares[Math.floor(Math.random() * hardwares.length)]
+      while (division.products.includes(prodname)) {
+        prodname = hardwares[Math.floor(Math.random() * hardwares.length)]
+      }
+    }
+    let active2 = 0
+    for (const prod of division.products) {
+      const product = await proxy(ns, "corporation.getProduct", div, "Sector-12", prod)
+      if (product.developmentProgress === 100)
+        active2++
+    }
+    const corp = await proxy(ns, "corporation.getCorporation")
+    if (!researching && active2 < division.maxProducts && corp.funds > 200)
+      await proxy(ns, "corporation.makeProduct", div, "Sector-12", prodname, corp.funds / 100, corp.funds / 100)
+  }
+}
+/** @param {NS} ns */
+async function officeSize(ns, div, city) {
+  const office = await proxy(ns, "corporation.getOffice", div, city)
+  return office.size
+}
+/** @param {NS} ns */
+async function officeNumEmployee(ns, div, city) {
+  const office = await proxy(ns, "corporation.getOffice", div, city)
+  return office.numEmployees
+}
+/** @param {NS} ns */
+async function setJob(ns, div, city, job, total) {
+  if (ns.ui.getGameInfo()?.versionNumber >= 44) await proxy(ns, "corporation.setJobAssignment", div, city, job, total)
+  else await proxy(ns, "corporation.setAutoJobAssignment", div, city, job, total)
+}
+/** @param {NS} ns */
+async function manageOffice(ns) {
+  const round = investOffer.round
+  let hasDiv2 = false
+  if (hasDivDB[div2]) {
+    let cityCount = 0
+    for (const city of cities) {
+      if (hasWarehouseDB[div2 + city])
+        cityCount++
+    }
+    if (cityCount === 6) hasDiv2 = true
+  }
+  let hasDiv3 = false
+  if (hasDivDB[div3]) {
+    let cityCount = 0
+    for (const city of cities) {
+      if (hasWarehouseDB[div3 + city]) {
+        cityCount++
+      }
+    }
+    if (cityCount === 6) hasDiv3 = true
+  }
 
-function getMaxProducts(ns, divisionName) {
-    let maxProducts = 3;
-    if (ns.corporation.hasResearched(divisionName, 'uPgrade: Capacity.I')) maxProducts++;
-    if (ns.corporation.hasResearched(divisionName, 'uPgrade: Capacity.II')) maxProducts++;
-    return maxProducts;
+  for (const div of industries) {
+    if (!hasDivDB[div]) continue
+    for (const city of cities) {
+      if (!hasOfficeDB[div + city]) continue
+      switch (hasDivDB[div].type) {
+        case "Agriculture":
+          switch (round) {
+            case 1: {
+              while (await officeSize(ns, div, city) < 4 && await proxy(ns, "corporation.getOfficeSizeUpgradeCost", div, city, 1) <= await corpFunds(ns))
+                await proxy(ns, "corporation.upgradeOfficeSize", div, city, 1)
+              while (await officeNumEmployee(ns, div, city) < await officeSize(ns, div, city) && await proxy(ns, "corporation.hireEmployee", div, city)) {/*hireEmployee is our stoping point*/ }
+              const office = await proxy(ns, "corporation.getOffice", div, city)
+              const rp = await getRP(ns, div)
+              if (rp < 60 && office.employeeJobs["Research & Development"] !== office.numEmployees) {
+                await resetOffice(ns, div, city)
+                await setJob(ns, div, city, "Research & Development", await officeNumEmployee(ns, div, city))
+              }
+              else if (rp >= 60 && (office.employeeJobs.Unassigned > 0
+                || office.employeeJobs.Operations !== 1
+                || office.employeeJobs.Engineer !== 1
+                || office.employeeJobs.Business !== 1
+                || office.employeeJobs.Management !== 1)) {
+                await resetOffice(ns, div, city)
+                await setJob(ns, div, city, "Operations", 1)
+                await setJob(ns, div, city, "Engineer", 1)
+                await setJob(ns, div, city, "Business", 1)
+                await setJob(ns, div, city, "Management", 1)
+              }
+            }
+              break
+            case 2: {
+              while (hasDiv2 && await officeSize(ns, div, city) < 8 && await proxy(ns, "corporation.getOfficeSizeUpgradeCost", div, city, 1) <= await corpFunds(ns)) await proxy(ns, "corporation.upgradeOfficeSize", div, city, 1)
+              while (await officeNumEmployee(ns, div, city) < await officeSize(ns, div, city) && await proxy(ns, "corporation.hireEmployee", div, city)) { }
+              const office = await proxy(ns, "corporation.getOffice", div, city)
+              const rp = await getRP(ns, div)
+              if (rp < 700 && office.employeeJobs["Research & Development"] !== office.numEmployees) {
+                await resetOffice(ns, div, city)
+                await setJob(ns, div, city, "Research & Development", await officeNumEmployee(ns, div, city))
+              }
+              else if (rp >= 700 && (office.employeeJobs.Unassigned > 0
+                || office.employeeJobs.Operations !== Math.floor(office.numEmployees / 2.66)
+                || office.employeeJobs.Engineer !== Math.floor(office.numEmployees / 4)
+                || office.employeeJobs.Business !== 1
+                || office.employeeJobs.Management !== office.numEmployees - 1 - Math.floor(office.numEmployees / 4) - Math.floor(office.numEmployees / 2.66))) {
+                await resetOffice(ns, div, city)
+                await setJob(ns, div, city, "Operations", Math.floor(office.numEmployees / 2.66))
+                await setJob(ns, div, city, "Engineer", Math.floor(office.numEmployees / 4))
+                await setJob(ns, div, city, "Business", 1)
+                const remainder = office.numEmployees - 1 - Math.floor(office.numEmployees / 4) - Math.floor(office.numEmployees / 2.66)
+                await setJob(ns, div, city, "Management", remainder)
+              }
+            }
+              break
+            case 3: {
+              const office = await proxy(ns, "corporation.getOffice", div, city)
+              if (!hasDiv3
+                && (office.employeeJobs.Unassigned > 0
+                  || office.employeeJobs.Operations !== 1
+                  || office.employeeJobs.Engineer !== Math.floor(office.numEmployees / 3)
+                  || office.employeeJobs.Business !== 1
+                  || office.employeeJobs.Management !== Math.floor(office.numEmployees / 4)
+                  || office.employeeJobs["Research & Development"] !== office.numEmployees - 1 - Math.floor(office.numEmployees / 3) - 1 - Math.floor(office.numEmployees / 4))) {
+                await resetOffice(ns, div, city)
+                await setJob(ns, div, city, "Operations", 1)
+                await setJob(ns, div, city, "Engineer", Math.floor(office.numEmployees / 3))
+                await setJob(ns, div, city, "Business", 1)
+                await setJob(ns, div, city, "Management", Math.floor(office.numEmployees / 4))
+                const left = office.numEmployees - 1 - Math.floor(office.numEmployees / 3) - 1 - Math.floor(office.numEmployees / 4)
+                await setJob(ns, div, city, "Research & Development", left)
+              }
+              if (!hasDiv3) break
+              while (await officeSize(ns, div, city) < 8 && await proxy(ns, "corporation.getOfficeSizeUpgradeCost", div, city, 1) <= await corpFunds(ns))
+                await proxy(ns, "corporation.upgradeOfficeSize", div, city, 1)
+              if (office.employeeJobs.Unassigned > 0
+                || office.employeeJobs.Operations !== 1
+                || office.employeeJobs.Engineer !== Math.floor(office.numEmployees / 3)
+                || office.employeeJobs.Business !== 1
+                || office.employeeJobs.Management !== Math.floor(office.numEmployees / 4)
+                || office.employeeJobs["Research & Development"] !== office.numEmployees - 1 - Math.floor(office.numEmployees / 3) - 1 - Math.floor(office.numEmployees / 4)) {
+                await resetOffice(ns, div, city)
+                const office = await proxy(ns, "corporation.getOffice", div, city)
+                await setJob(ns, div, city, "Operations", 1)
+                await setJob(ns, div, city, "Engineer", Math.floor(office.numEmployees / 3))
+                await setJob(ns, div, city, "Business", 1)
+                await setJob(ns, div, city, "Management", Math.floor(office.numEmployees / 4))
+                const left = office.numEmployees - 1 - Math.floor(office.numEmployees / 3) - 1 - Math.floor(office.numEmployees / 4)
+                await setJob(ns, div, city, "Research & Development", left)
+              }
+            }
+              break
+            case 4: {
+              if (await officeSize(ns, div, city) < 60)
+                await proxy(ns, "corporation.upgradeOfficeSize", div, city, 1)
+              if (await officeNumEmployee(ns, div, city) < await officeSize(ns, div, city))
+                await proxy(ns, "corporation.hireEmployee", div, city)
+              const office = await proxy(ns, "corporation.getOffice", div, city)
+              if (office.employeeJobs.Unassigned > 0
+                || office.employeeJobs.Operations !== 1
+                || office.employeeJobs.Engineer !== Math.floor(office.numEmployees / 2)
+                || office.employeeJobs.Business !== 1
+                || office.employeeJobs.Management !== Math.floor(office.numEmployees / 4)
+                || office.employeeJobs["Research & Development"] !== office.numEmployees - 1 - Math.floor(office.numEmployees / 2) - 1 - Math.floor(office.numEmployees / 4)) {
+                await resetOffice(ns, div, city)
+                await setJob(ns, div, city, "Operations", 1)
+                await setJob(ns, div, city, "Engineer", Math.floor(office.numEmployees / 2))
+                await setJob(ns, div, city, "Business", 1)
+                await setJob(ns, div, city, "Management", Math.floor(office.numEmployees / 4))
+                const left = office.numEmployees - 1 - Math.floor(office.numEmployees / 2) - 1 - Math.floor(office.numEmployees / 4)
+                await setJob(ns, div, city, "Research & Development", left)
+              }
+            }
+              break
+            case 5: {
+              if (await officeSize(ns, div, city) < 300)
+                await proxy(ns, "corporation.upgradeOfficeSize", div, city, 1)
+              if (await officeNumEmployee(ns, div, city) < await officeSize(ns, div, city))
+                await proxy(ns, "corporation.hireEmployee", div, city)
+              const office = await proxy(ns, "corporation.getOffice", div, city)
+              if (office.employeeJobs.Unassigned > 0
+                || office.employeeJobs.Operations !== 1
+                || office.employeeJobs.Engineer !== Math.floor(office.numEmployees / 2.5)
+                || office.employeeJobs.Business !== 1
+                || office.employeeJobs.Management !== Math.floor(office.numEmployees / 2.5)
+                || office.employeeJobs["Research & Development"] !== office.numEmployees - 1 - Math.floor(office.numEmployees / 2.5) - Math.floor(office.numEmployees / 2.5) - 1) {
+                await resetOffice(ns, div, city)
+                const office = await proxy(ns, "corporation.getOffice", div, city)
+                await setJob(ns, div, city, "Operations", 1)
+                await setJob(ns, div, city, "Business", 1)
+                await setJob(ns, div, city, "Engineer", Math.floor(office.numEmployees / 2.5))
+                await setJob(ns, div, city, "Management", Math.floor(office.numEmployees / 2.5))
+                const left = office.numEmployees - 1 - Math.floor(office.numEmployees / 2.5) - Math.floor(office.numEmployees / 2.5) - 1
+                await setJob(ns, div, city, "Research & Development", left)
+              }
+              break
+            }
+          }
+          break
+        case "Chemical":
+          switch (round) {
+            case 2: {
+              while (await officeSize(ns, div, city) < 3 && await proxy(ns, "corporation.getOfficeSizeUpgradeCost", div, city, 1) <= await corpFunds(ns))
+                await proxy(ns, "corporation.upgradeOfficeSize", div, city, 1)
+              while (await officeNumEmployee(ns, div, city) < await officeSize(ns, div, city) && await proxy(ns, "corporation.hireEmployee", div, city)) { }
+              const office = await proxy(ns, "corporation.getOffice", div, city)
+              const rp = await getRP(ns, div)
+              if (rp < 390 && office.employeeJobs["Research & Development"] !== office.numEmployees) {
+                await resetOffice(ns, div, city)
+                await setJob(ns, div, city, "Research & Development", office.numEmployees)
+              }
+              else if (rp >= 390 && (office.employeeJobs.Unassigned > 0
+                || office.employeeJobs.Operations !== 1
+                || office.employeeJobs.Engineer !== 1
+                || office.employeeJobs.Business !== 1)) {
+                await resetOffice(ns, div, city)
+                await setJob(ns, div, city, "Operations", 1)
+                await setJob(ns, div, city, "Engineer", 1)
+                await setJob(ns, div, city, "Business", 1)
+              }
+            }
+              break
+            case 3: {
+              if (!hasDiv3) break
+              while (await officeSize(ns, div, city) < 8 && await proxy(ns, "corporation.getOfficeSizeUpgradeCost", div, city, 1) <= await corpFunds(ns))
+                await proxy(ns, "corporation.upgradeOfficeSize", div, city, 1)
+              while (await officeNumEmployee(ns, div, city) < await officeSize(ns, div, city) && await proxy(ns, "corporation.hireEmployee", div, city)) { }
+              const office = await proxy(ns, "corporation.getOffice", div, city)
+              if (office.employeeJobs.Unassigned > 0
+                || office.employeeJobs.Operations !== Math.max(1, Math.floor(office.numEmployees / 4))
+                || office.employeeJobs.Engineer !== Math.floor(office.numEmployees / 4)
+                || office.employeeJobs.Business !== 1
+                || office.employeeJobs.Management !== Math.floor(office.numEmployees / 4)
+                || office.employeeJobs["Research & Development"] !== office.numEmployees - Math.max(1, Math.floor(office.numEmployees / 4)) - Math.floor(office.numEmployees / 4) - Math.floor(office.numEmployees / 4) - 1) {
+                await resetOffice(ns, div, city)
+                await setJob(ns, div, city, "Operations", Math.max(1, Math.floor(office.numEmployees / 4)))
+                await setJob(ns, div, city, "Engineer", Math.floor(office.numEmployees / 4))
+                await setJob(ns, div, city, "Business", 1)
+                await setJob(ns, div, city, "Management", Math.floor(office.numEmployees / 4))
+                const left = office.numEmployees - Math.max(1, Math.floor(office.numEmployees / 4)) - Math.floor(office.numEmployees / 4) - Math.floor(office.numEmployees / 4) - 1
+                await setJob(ns, div, city, "Research & Development", left)
+              }
+            }
+              break
+            case 4: {
+              if (await officeSize(ns, div, city) < 60)
+                await proxy(ns, "corporation.upgradeOfficeSize", div, city, 1)
+              if (await officeNumEmployee(ns, div, city) < await officeSize(ns, div, city))
+                await proxy(ns, "corporation.hireEmployee", div, city)
+              const office = await proxy(ns, "corporation.getOffice", div, city)
+              if (office.employeeJobs.Unassigned > 0
+                || office.employeeJobs.Operations !== Math.floor(office.numEmployees / 4)
+                || office.employeeJobs.Engineer !== Math.floor(office.numEmployees / 4)
+                || office.employeeJobs.Business !== 1
+                || office.employeeJobs.Management !== Math.floor(office.numEmployees / 4)
+                || office.employeeJobs["Research & Development"] !== office.numEmployees - Math.floor(office.numEmployees / 4) - Math.floor(office.numEmployees / 4) - Math.floor(office.numEmployees / 4) - 1) {
+                await resetOffice(ns, div, city)
+                await setJob(ns, div, city, "Operations", Math.floor(office.numEmployees / 4))
+                await setJob(ns, div, city, "Engineer", Math.floor(office.numEmployees / 4))
+                await setJob(ns, div, city, "Business", 1)
+                await setJob(ns, div, city, "Management", Math.floor(office.numEmployees / 4))
+                const left = office.numEmployees - Math.floor(office.numEmployees / 4) - Math.floor(office.numEmployees / 4) - Math.floor(office.numEmployees / 4) - 1
+                await setJob(ns, div, city, "Research & Development", left)
+              }
+            }
+              break
+            case 5: {
+              if (await officeSize(ns, div, city) < 300)
+                await proxy(ns, "corporation.upgradeOfficeSize", div, city, 1)
+              if (await officeNumEmployee(ns, div, city) < officeSize(ns, div, city))
+                await proxy(ns, "corporation.hireEmployee", div, city)
+              const office = await proxy(ns, "corporation.getOffice", div, city)
+              if (office.employeeJobs.Unassigned > 0
+                || office.employeeJobs.Operations !== Math.floor(office.numEmployees / 4)
+                || office.employeeJobs.Engineer !== Math.floor(office.numEmployees / 3)
+                || office.employeeJobs.Business !== 1
+                || office.employeeJobs.Management !== Math.floor(office.numEmployees / 3)
+                || office.employeeJobs["Research & Development"] !== office.numEmployees - Math.floor(office.numEmployees / 3) - Math.floor(office.numEmployees / 3) - Math.floor(office.numEmployees / 4) - 1) {
+                await resetOffice(ns, div, city)
+                await setJob(ns, div, city, "Operations", Math.floor(office.numEmployees / 4))
+                await setJob(ns, div, city, "Business", 1)
+                await setJob(ns, div, city, "Engineer", Math.floor(office.numEmployees / 3))
+                await setJob(ns, div, city, "Management", Math.floor(office.numEmployees / 3))
+                const left = office.numEmployees - Math.floor(office.numEmployees / 3) - Math.floor(office.numEmployees / 3) - Math.floor(office.numEmployees / 4) - 1
+                await setJob(ns, div, city, "Research & Development", left)
+              }
+              break
+            }
+          }
+          break
+        case "Tobacco":
+          switch (round) {
+            case 3: {
+              while (await officeNumEmployee(ns, div, city) < await officeSize(ns, div, city) && await proxy(ns, "corporation.hireEmployee", div, city)) { }
+              const office = await proxy(ns, "corporation.getOffice", div, city)
+              if (city !== "Sector-12" && !tobaccoBooster && office.employeeJobs["Research & Development"] !== office.numEmployees) {
+                await resetOffice(ns, div, city)
+                await setJob(ns, div, city, "Research & Development", office.numEmployees)
+              }
+              else if (city === "Sector-12"
+                && (office.employeeJobs.Unassigned > 0
+                  || office.employeeJobs.Operations !== Math.floor(office.numEmployees / 3)
+                  || office.employeeJobs.Engineer !== Math.floor(office.numEmployees / 3)
+                  || office.employeeJobs.Business !== 1
+                  || office.employeeJobs.Management !== office.numEmployees - Math.floor(office.numEmployees / 3) - Math.floor(office.numEmployees / 3) - 1)) {
+                await resetOffice(ns, div, city)
+                await setJob(ns, div, city, "Operations", Math.floor(office.numEmployees / 3))
+                await setJob(ns, div, city, "Engineer", Math.floor(office.numEmployees / 3))
+                await setJob(ns, div, city, "Business", 1)
+                const left = office.numEmployees - Math.floor(office.numEmployees / 3) - Math.floor(office.numEmployees / 3) - 1
+                await setJob(ns, div, city, "Management", left)
+              }
+              if (!hasDiv3) break
+              const corp = await proxy(ns, "corporation.getCorporation")
+              const corpRev = corp.revenue
+              while (await officeSize(ns, div, city) < 106 && await proxy(ns, "corporation.getOfficeSizeUpgradeCost", div, city, 1) * 1.5 <= await corpFunds(ns))
+                await proxy(ns, "corporation.upgradeOfficeSize", div, city, 1)
+              if (corpRev > 50e9)
+                while (await officeSize(ns, div, city) < 226 && await proxy(ns, "corporation.getOfficeSizeUpgradeCost", div, city, 1) * 1.5 <= await corpFunds(ns))
+                  await proxy(ns, "corporation.upgradeOfficeSize", div, city, 1)
+              else if (corpRev > 20e9)
+                while (await officeSize(ns, div, city) < 200 && await proxy(ns, "corporation.getOfficeSizeUpgradeCost", div, city, 1) * 1.5 <= await corpFunds(ns))
+                  await proxy(ns, "corporation.upgradeOfficeSize", div, city, 1)
+              else if (corpRev > 10e9)
+                while (await officeSize(ns, div, city) < 176 && await proxy(ns, "corporation.getOfficeSizeUpgradeCost", div, city, 1) * 1.5 <= await corpFunds(ns))
+                  await proxy(ns, "corporation.upgradeOfficeSize", div, city, 1)
+              else if (corpRev > 5e9)
+                while (await officeSize(ns, div, city) < 156 && await proxy(ns, "corporation.getOfficeSizeUpgradeCost", div, city, 1) * 1.5 <= await corpFunds(ns))
+                  await proxy(ns, "corporation.upgradeOfficeSize", div, city, 1)
+              else if (corpRev > 2.5e9)
+                while (await officeSize(ns, div, city) < 146 && await proxy(ns, "corporation.getOfficeSizeUpgradeCost", div, city, 1) * 1.5 <= await corpFunds(ns))
+                  await proxy(ns, "corporation.upgradeOfficeSize", div, city, 1)
+              else if (corpRev > 1e9)
+                while (await officeSize(ns, div, city) < 136 && await proxy(ns, "corporation.getOfficeSizeUpgradeCost", div, city, 1) * 1.5 <= await corpFunds(ns))
+                  await proxy(ns, "corporation.upgradeOfficeSize", div, city, 1)
+              else if (corpRev > 5e8)
+                while (await officeSize(ns, div, city) < 116 && await proxy(ns, "corporation.getOfficeSizeUpgradeCost", div, city, 1) * 1.5 <= await corpFunds(ns))
+                  await proxy(ns, "corporation.upgradeOfficeSize", div, city, 1)
+              while (await officeNumEmployee(ns, div, city) < await officeSize(ns, div, city) && await proxy(ns, "corporation.hireEmployee", div, city)) { }
+              const office2 = await proxy(ns, "corporation.getOffice", div, city)
+              if (city !== "Sector-12" && !tobaccoBooster && office2.employeeJobs["Research & Development"] !== office2.numEmployees) {
+                await resetOffice(ns, div, city)
+                await setJob(ns, div, city, "Research & Development", office2.numEmployees)
+              }
+              else if (city === "Sector-12"
+                && (office.employeeJobs.Unassigned > 0
+                  || office.employeeJobs.Operations !== Math.floor(office2.numEmployees / 3)
+                  || office.employeeJobs.Engineer !== Math.floor(office2.numEmployees / 3)
+                  || office.employeeJobs.Business !== 1
+                  || office.employeeJobs.Management !== office2.numEmployees - Math.floor(office2.numEmployees / 3) - Math.floor(office2.numEmployees / 3) - 1)) {
+                await resetOffice(ns, div, city)
+                await setJob(ns, div, city, "Operations", Math.floor(office2.numEmployees / 3))
+                await setJob(ns, div, city, "Engineer", Math.floor(office2.numEmployees / 3))
+                await setJob(ns, div, city, "Business", 1)
+                const left = office2.numEmployees - Math.floor(office2.numEmployees / 3) - Math.floor(office2.numEmployees / 3) - 1
+                await setJob(ns, div, city, "Management", left)
+              }
+            }
+              break
+            case 4: {
+              const corp = await proxy(ns, "corporation.getCorporation")
+              const corpRev = corp.revenue
+              if (await officeSize(ns, div, city) < 250)
+                await proxy(ns, "corporation.upgradeOfficeSize", div, city, 1)
+              if (corpRev > 2e12)
+                while (await officeSize(ns, div, city) < 380 && await proxy(ns, "corporation.getOfficeSizeUpgradeCost", div, city, 1) * 1.5 <= await corpFunds(ns))
+                  await proxy(ns, "corporation.upgradeOfficeSize", div, city, 1)
+              else if (corpRev > 1e12)
+                while (await officeSize(ns, div, city) < 360 && await proxy(ns, "corporation.getOfficeSizeUpgradeCost", div, city, 1) * 1.5 <= await corpFunds(ns))
+                  await proxy(ns, "corporation.upgradeOfficeSize", div, city, 1)
+              else if (corpRev > 400e9)
+                while (await officeSize(ns, div, city) < 320 && await proxy(ns, "corporation.getOfficeSizeUpgradeCost", div, city, 1) * 1.5 <= await corpFunds(ns))
+                  await proxy(ns, "corporation.upgradeOfficeSize", div, city, 1)
+              else if (corpRev > 200e9)
+                while (await officeSize(ns, div, city) < 290 && await proxy(ns, "corporation.getOfficeSizeUpgradeCost", div, city, 1) * 1.5 <= await corpFunds(ns))
+                  await proxy(ns, "corporation.upgradeOfficeSize", div, city, 1)
+              else if (corpRev > 100e9)
+                while (await officeSize(ns, div, city) < 270 && await proxy(ns, "corporation.getOfficeSizeUpgradeCost", div, city, 1) * 1.5 <= await corpFunds(ns))
+                  await proxy(ns, "corporation.upgradeOfficeSize", div, city, 1)
+              if (await officeNumEmployee(ns, div, city) < await officeSize(ns, div, city))
+                await proxy(ns, "corporation.hireEmployee", div, city)
+              const office = await proxy(ns, "corporation.getOffice", div, city)
+              if (city !== "Sector-12" && !tobaccoBooster && office.employeeJobs["Research & Development"] !== office.numEmployees) {
+                await resetOffice(ns, div, city)
+                await setJob(ns, div, city, "Research & Development", office.numEmployees)
+              }
+              else if (city === "Sector-12"
+                && (office.employeeJobs.Unassigned > 0
+                  || office.employeeJobs.Operations !== Math.floor(office.numEmployees / 3)
+                  || office.employeeJobs.Engineer !== Math.floor(office.numEmployees / 3)
+                  || office.employeeJobs.Business !== 1
+                  || office.employeeJobs.Management !== office.numEmployees - Math.floor(office.numEmployees / 3) - Math.floor(office.numEmployees / 3) - 1)) {
+                await resetOffice(ns, div, city)
+                await setJob(ns, div, city, "Operations", Math.floor(office.numEmployees / 3))
+                await setJob(ns, div, city, "Engineer", Math.floor(office.numEmployees / 3))
+                await setJob(ns, div, city, "Business", 1)
+                const left = office.numEmployees - Math.floor(office.numEmployees / 3) - Math.floor(office.numEmployees / 3) - 1
+                await setJob(ns, div, city, "Management", left)
+              }
+            }
+              break
+            case 5:
+              while (await officeSize(ns, div, city) < 1500 && await corpFunds(ns) >= await proxy(ns, "corporation.getOfficeSizeUpgradeCost", div, city, 1))
+                await proxy(ns, "corporation.upgradeOfficeSize", div, city, 1)
+              while (await officeNumEmployee(ns, div, city) < await officeSize(ns, div, city) && await proxy(ns, "corporation.hireEmployee", div, city)) { }
+              const office = await proxy(ns, "corporation.getOffice", div, city)
+              if (city !== "Sector-12" && office.employeeJobs["Research & Development"] !== office.numEmployees) {
+                await resetOffice(ns, div, city)
+                await setJob(ns, div, city, "Research & Development", office.numEmployees)
+              }
+              else if (city === "Sector-12"
+                && (office.employeeJobs.Unassigned > 0
+                  || office.employeeJobs.Operations !== Math.floor(office.numEmployees / 4)
+                  || office.employeeJobs.Engineer !== Math.floor(office.numEmployees / 4)
+                  || office.employeeJobs.Business !== 1
+                  || office.employeeJobs.Management !== office.numEmployees - Math.floor(office.numEmployees / 4) - Math.floor(office.numEmployees / 4) - 1)) {
+                await resetOffice(ns, div, city)
+                await setJob(ns, div, city, "Operations", Math.floor(office.numEmployees / 4))
+                await setJob(ns, div, city, "Engineer", Math.floor(office.numEmployees / 4))
+                await setJob(ns, div, city, "Business", 1)
+                const left = office.numEmployees - Math.floor(office.numEmployees / 4) - Math.floor(office.numEmployees / 4) - 1
+                await setJob(ns, div, city, "Management", left)
+              }
+              break
+          }
+          break
+        case "Restaurant":
+          switch (round) {
+            case 5:
+              while (await officeSize(ns, div, city) < 1500 && await corpFunds(ns) >= await proxy(ns, "corporation.getOfficeSizeUpgradeCost", div, city, 1))
+                await proxy(ns, "corporation.upgradeOfficeSize", div, city, 1)
+              while (await officeNumEmployee(ns, div, city) < await officeSize(ns, div, city) && await proxy(ns, "corporation.hireEmployee", div, city)) { }
+              const office = await proxy(ns, "corporation.getOffice", div, city)
+              if (city !== "Sector-12" && office.employeeJobs["Research & Development"] !== office.numEmployees) {
+                await resetOffice(ns, div, city)
+                await setJob(ns, div, city, "Research & Development", office.numEmployees)
+              }
+              else if (city === "Sector-12"
+                && (office.employeeJobs.Unassigned > 0
+                  || office.employeeJobs.Operations !== Math.floor(office.numEmployees / 4)
+                  || office.employeeJobs.Engineer !== Math.floor(office.numEmployees / 4)
+                  || office.employeeJobs.Business !== 1
+                  || office.employeeJobs.Management !== office.numEmployees - Math.floor(office.numEmployees / 4) - Math.floor(office.numEmployees / 4) - 1)) {
+                await resetOffice(ns, div, city)
+                await setJob(ns, div, city, "Operations", Math.floor(office.numEmployees / 4))
+                await setJob(ns, div, city, "Engineer", Math.floor(office.numEmployees / 4))
+                await setJob(ns, div, city, "Business", 1)
+                const left = office.numEmployees - Math.floor(office.numEmployees / 4) - Math.floor(office.numEmployees / 4) - 1
+                await setJob(ns, div, city, "Management", left)
+              }
+              break
+          }
+          break
+        case "Water Utilities":
+          switch (round) {
+            case 5:
+              while (await officeSize(ns, div, city) < 6500 && await corpFunds(ns) >= await proxy(ns, "corporation.getOfficeSizeUpgradeCost", div, city, 1))
+                await proxy(ns, "corporation.upgradeOfficeSize", div, city, 1)
+              while (await officeNumEmployee(ns, div, city) < await officeSize(ns, div, city) && await proxy(ns, "corporation.hireEmployee", div, city)) { }
+              const office = await proxy(ns, "corporation.getOffice", div, city)
+              if (office.employeeJobs.Unassigned > 0
+                || office.employeeJobs.Operations !== Math.floor(office.numEmployees / 4)
+                || office.employeeJobs.Engineer !== Math.floor(office.numEmployees / 3)
+                || office.employeeJobs.Business !== 1
+                || office.employeeJobs.Management !== Math.floor(office.numEmployees / 3)
+                || office.employeeJobs["Research & Development"] !== office.numEmployees - Math.floor(office.numEmployees / 3) - Math.floor(office.numEmployees / 3) - Math.floor(office.numEmployees / 4) - 1) {
+                await resetOffice(ns, div, city)
+                await setJob(ns, div, city, "Operations", Math.floor(office.numEmployees / 4))
+                await setJob(ns, div, city, "Business", 1)
+                await setJob(ns, div, city, "Engineer", Math.floor(office.numEmployees / 3))
+                await setJob(ns, div, city, "Management", Math.floor(office.numEmployees / 3))
+                const left = office.numEmployees - Math.floor(office.numEmployees / 3) - Math.floor(office.numEmployees / 3) - Math.floor(office.numEmployees / 4) - 1
+                await setJob(ns, div, city, "Research & Development", left)
+              }
+              break
+          }
+          break
+        case "Computer Hardware":
+          switch (round) {
+            case 5:
+              while (await officeSize(ns, div, city) < 4500 && await corpFunds(ns) >= await proxy(ns, "corporation.getOfficeSizeUpgradeCost", div, city, 1))
+                await proxy(ns, "corporation.upgradeOfficeSize", div, city, 1)
+              while (await officeNumEmployee(ns, div, city) < await officeSize(ns, div, city) && await proxy(ns, "corporation.hireEmployee", div, city)) { }
+              const office = await proxy(ns, "corporation.getOffice", div, city)
+              if (office.employeeJobs.Unassigned > 0
+                || office.employeeJobs.Operations !== Math.floor(office.numEmployees / 3)
+                || office.employeeJobs.Engineer !== Math.floor(office.numEmployees / 4)
+                || office.employeeJobs.Business !== 1
+                || office.employeeJobs.Management !== Math.floor(office.numEmployees / 3)
+                || office.employeeJobs["Research & Development"] !== office.numEmployees - Math.floor(office.numEmployees / 3) - Math.floor(office.numEmployees / 3) - Math.floor(office.numEmployees / 4) - 1) {
+                await resetOffice(ns, div, city)
+                await setJob(ns, div, city, "Operations", Math.floor(office.numEmployees / 3))
+                await setJob(ns, div, city, "Business", 1)
+                await setJob(ns, div, city, "Engineer", Math.floor(office.numEmployees / 4))
+                await setJob(ns, div, city, "Management", Math.floor(office.numEmployees / 3))
+                const left = office.numEmployees - Math.floor(office.numEmployees / 3) - Math.floor(office.numEmployees / 3) - Math.floor(office.numEmployees / 4) - 1
+                await setJob(ns, div, city, "Research & Development", left)
+              }
+              break
+          }
+          break
+        case "Refinery":
+          switch (round) {
+            case 5:
+              while (await officeSize(ns, div, city) < 6500 && await corpFunds(ns) >= await proxy(ns, "corporation.getOfficeSizeUpgradeCost", div, city, 1))
+                await proxy(ns, "corporation.upgradeOfficeSize", div, city, 1)
+              while (await officeNumEmployee(ns, div, city) < await officeSize(ns, div, city) && await proxy(ns, "corporation.hireEmployee", div, city)) { }
+              const office = await proxy(ns, "corporation.getOffice", div, city)
+              if (office.employeeJobs.Unassigned > 0
+                || office.employeeJobs.Operations !== Math.floor(office.numEmployees / 3)
+                || office.employeeJobs.Engineer !== Math.floor(office.numEmployees / 4)
+                || office.employeeJobs.Business !== 1
+                || office.employeeJobs.Management !== Math.floor(office.numEmployees / 3)
+                || office.employeeJobs["Research & Development"] !== office.numEmployees - Math.floor(office.numEmployees / 3) - Math.floor(office.numEmployees / 3) - Math.floor(office.numEmployees / 4) - 1) {
+                await resetOffice(ns, div, city)
+                await setJob(ns, div, city, "Operations", Math.floor(office.numEmployees / 3))
+                await setJob(ns, div, city, "Business", 1)
+                await setJob(ns, div, city, "Engineer", Math.floor(office.numEmployees / 4))
+                await setJob(ns, div, city, "Management", Math.floor(office.numEmployees / 3))
+                const left = office.numEmployees - Math.floor(office.numEmployees / 3) - Math.floor(office.numEmployees / 3) - Math.floor(office.numEmployees / 4) - 1
+                await setJob(ns, div, city, "Research & Development", left)
+              }
+              break
+          }
+          break
+        case "Mining":
+          switch (round) {
+            case 5:
+              while (await officeSize(ns, div, city) < 1500 && await corpFunds(ns) >= await proxy(ns, "corporation.getOfficeSizeUpgradeCost", div, city, 1))
+                await proxy(ns, "corporation.upgradeOfficeSize", div, city, 1)
+              while (await officeNumEmployee(ns, div, city) < await officeSize(ns, div, city) && await proxy(ns, "corporation.hireEmployee", div, city)) { }
+              const office = await proxy(ns, "corporation.getOffice", div, city)
+              if (office.employeeJobs.Unassigned > 0
+                || office.employeeJobs.Operations !== Math.floor(office.numEmployees / 4)
+                || office.employeeJobs.Engineer !== Math.floor(office.numEmployees / 3)
+                || office.employeeJobs.Business !== 1
+                || office.employeeJobs.Management !== Math.floor(office.numEmployees / 3)
+                || office.employeeJobs["Research & Development"] !== office.numEmployees - Math.floor(office.numEmployees / 3) - Math.floor(office.numEmployees / 3) - Math.floor(office.numEmployees / 4) - 1) {
+                await resetOffice(ns, div, city)
+                await setJob(ns, div, city, "Operations", Math.floor(office.numEmployees / 4))
+                await setJob(ns, div, city, "Business", 1)
+                await setJob(ns, div, city, "Engineer", Math.floor(office.numEmployees / 3))
+                await setJob(ns, div, city, "Management", Math.floor(office.numEmployees / 3))
+                const left = office.numEmployees - Math.floor(office.numEmployees / 3) - Math.floor(office.numEmployees / 3) - Math.floor(office.numEmployees / 4) - 1
+                await setJob(ns, div, city, "Research & Development", left)
+              }
+              break
+          }
+          break
+      }
+    }
+  }
+}
+/** @param {NS} ns */
+async function resetOffice(ns, div, city) {
+  await setJob(ns, div, city, "Operations", 0)
+  await setJob(ns, div, city, "Engineer", 0)
+  await setJob(ns, div, city, "Business", 0)
+  await setJob(ns, div, city, "Management", 0)
+  await setJob(ns, div, city, "Research & Development", 0)
+  await setJob(ns, div, city, "Intern", 0)
+}
+/** @param {NS} ns */
+async function teaParty(ns) {
+  let needed = false
+  for (const div of industries) {
+    if (!hasDivDB[div]) continue
+    for (const city of cities) {
+      if (!hasOfficeDB[div + city]) continue
+      const office = await proxy(ns, "corporation.getOffice", div, city)
+      if (office.avgEnergy < office.maxEnergy - .5) {
+        await proxy(ns, "corporation.buyTea", div, city)
+        needed = true
+      }
+      if (office.avgMorale < office.maxMorale - 10) {
+        await proxy(ns, "corporation.throwParty", div, city, 500000)
+        needed = true
+      }
+      else if (office.avgMorale < office.maxMorale - 5) {
+        await proxy(ns, "corporation.throwParty", div, city, 200000)
+        needed = true
+      }
+      else if (office.avgMorale < office.maxMorale - .5) {
+        await proxy(ns, "corporation.throwParty", div, city, 100000)
+        needed = true
+      }
+      else if (office.avgMorale < office.maxMorale) {
+        await proxy(ns, "corporation.throwParty", div, city, 50000)
+        needed = false
+      }
+    }
+  }
+  return needed
+}
+/** @param {NS} ns */
+async function purchase(ns) {
+  for (const div of industries) {
+    if (!hasDivDB[div]) continue
+    for (const city of cities) {
+      if (!hasWarehouseDB[div + city]) continue
+      const smartBuy = []
+      const warehouse = await proxy(ns, "corporation.getWarehouse", div, city)
+      if (!indDataDB[hasDivDB[div].type]) {
+        indDataDB[hasDivDB[div].type] = await proxy(ns, "corporation.getIndustryData", hasDivDB[div].type)
+      }
+      /* Process purchase of materials, not from smart supply */
+      for (const [matName, mat] of Object.entries(indDataDB[hasDivDB[div].type].requiredMaterials)) {
+        // Smart supply
+        let buyAmt = await maxMatRequired(ns, div, city, matName)
+        const material = await proxy(ns, "corporation.getMaterial", div, city, matName)
+        buyAmt -= material.stored
+        if (!matDataDB[matName])
+          matDataDB[matName] = await proxy(ns, "corporation.getMaterialData", matName)
+        const maxAmt = Math.floor((warehouse.size - warehouse.sizeUsed) / matDataDB[matName].size);
+        buyAmt = Math.min(buyAmt, maxAmt);
+        smartBuy[matName] = [buyAmt, mat];
+      } //End process purchase of materials
+
+      // Use the materials already in the warehouse if the option is on.
+      for (const [matName, [buy, reqMat]] of Object.entries(smartBuy)) {
+        const buyAmt = buy
+        const mult = await getMult(ns, div, city)
+        if (mult[0] === 0) {
+          await proxy(ns, "corporation.buyMaterial", div, city, matName, 0)
+          await proxy(ns, "corporation.sellMaterial", div, city, matName, "MAX", "0")
+        }
+        else if (buyAmt > 0) {
+          await proxy(ns, "corporation.buyMaterial", div, city, matName, buyAmt / 10)
+          await proxy(ns, "corporation.sellMaterial", div, city, matName, 0, "MP")
+        }
+        else {
+          await proxy(ns, "corporation.buyMaterial", div, city, matName, 0)
+          const material = await proxy(ns, "corporation.getMaterial", div, city, matName)
+          if (material.quality <= 1)
+            await proxy(ns, "corporation.sellMaterial", div, city, matName, buyAmt / 10 * -1, "0")
+          else await proxy(ns, "corporation.sellMaterial", div, city, matName, buyAmt / 10 * -1, "MP")
+        }
+      }
+    }//city
+  }//div
+}
+/** @param {NS} ns */
+async function importExport(ns) {
+  if (!researchedDB["Export"]) return
+  for (const div of industries) {
+    if (!hasDivDB[div]) continue
+    if (!indDataDB[hasDivDB[div].type])
+      indDataDB[hasDivDB[div].type] = await proxy(ns, "corporation.getIndustryData", hasDivDB[div].type)
+    if (!indDataDB[hasDivDB[div].type].makesMaterials) continue
+    for (const city of cities) {
+      //We make this.  Export it
+      for (const name of Object.values(indDataDB[hasDivDB[div].type].producedMaterials)) {
+        if (name === "Plants") { //(IPROD+IINV/10)*(-1)   (-IPROD-IINV/10)
+          await proxy(ns, "corporation.cancelExportMaterial", div, city, div3, "Sector-12", name)
+          await proxy(ns, "corporation.cancelExportMaterial", div, city, div3, city, name)
+          await proxy(ns, "corporation.cancelExportMaterial", div, city, div2, city, name)
+          await proxy(ns, "corporation.exportMaterial", div, city, div2, city, name, `(IPROD+IINV/10)*(-1)`)
+          await proxy(ns, "corporation.exportMaterial", div, city, div3, city, name, `(IPROD+IINV/10)*(-1)`)
+          await proxy(ns, "corporation.exportMaterial", div, city, div3, "Sector-12", name, `(IPROD+IINV/10)*(-1)`)
+        }
+        else if (name === "Chemicals") {
+          await proxy(ns, "corporation.cancelExportMaterial", div, city, div1, city, name)
+          await proxy(ns, "corporation.exportMaterial", div, city, div1, city, name, `(IPROD+IINV/10)*(-1)`)
+        }
+        else if (name === "Food") {
+          await proxy(ns, "corporation.cancelExportMaterial", div, city, div4, "Sector-12", name)
+          await proxy(ns, "corporation.cancelExportMaterial", div, city, div4, city, name)
+          await proxy(ns, "corporation.exportMaterial", div, city, div4, "Sector-12", name, `(IPROD+IINV/10)*(-1)`)
+          await proxy(ns, "corporation.exportMaterial", div, city, div4, city, name, `(IPROD+IINV/10)*(-1)`)
+        }
+        else if (name === "Water") {
+          await proxy(ns, "corporation.cancelExportMaterial", div, city, div1, city, name)
+          await proxy(ns, "corporation.cancelExportMaterial", div, city, div2, city, name)
+          await proxy(ns, "corporation.cancelExportMaterial", div, city, div4, city, name)
+          await proxy(ns, "corporation.exportMaterial", div, city, div1, city, name, `(IPROD+IINV/10)*(-1)`)
+          await proxy(ns, "corporation.exportMaterial", div, city, div2, city, name, `(IPROD+IINV/10)*(-1)`)
+          await proxy(ns, "corporation.exportMaterial", div, city, div4, city, name, `(IPROD+IINV/10)*(-1)`)
+        }
+        else if (name === "Hardware") {
+          await proxy(ns, "corporation.cancelExportMaterial", div, city, div5, city, name)
+          await proxy(ns, "corporation.cancelExportMaterial", div, city, div8, city, name)
+          await proxy(ns, "corporation.exportMaterial", div, city, div5, city, name, `(IPROD+IINV/10)*(-1)`)
+          await proxy(ns, "corporation.exportMaterial", div, city, div8, city, name, `(IPROD+IINV/10)*(-1)`)
+        }
+        else if (name === "Metal") {
+          await proxy(ns, "corporation.cancelExportMaterial", div, city, div6, city, name)
+          await proxy(ns, "corporation.exportMaterial", div, city, div6, city, name, `(IPROD+IINV/10)*(-1)`)
+        }
+        else if (name === "Ore") {
+          await proxy(ns, "corporation.cancelExportMaterial", div, city, div7, city, name)
+          await proxy(ns, "corporation.exportMaterial", div, city, div7, city, name, `(IPROD+IINV/10)*(-1)`)
+        }
+      }
+    }
+  }
+}
+/** @param {NS} ns */
+async function optimizeMats(ns) {
+  const round = investOffer.round
+  let runningWorkers = 0
+  const results = []
+  for (const div of industries) {
+    if (!hasDivDB[div]) continue
+    for (const city of cities) {
+      if (!hasWarehouseDB[div + city]) continue
+      const type = hasDivDB[div].type
+      if (!indDataDB[type])
+        indDataDB[type] = await proxy(ns, "corporation.getIndustryData", type)
+      let { hardwareFactor, robotFactor, aiCoreFactor, realEstateFactor } = indDataDB[type]
+      if (isNaN(hardwareFactor)) hardwareFactor = 0
+      if (isNaN(robotFactor)) robotFactor = 0
+      if (isNaN(aiCoreFactor)) aiCoreFactor = 0
+      if (isNaN(realEstateFactor)) realEstateFactor = 0
+
+      const divWeights = [hardwareFactor, robotFactor, aiCoreFactor, realEstateFactor]
+      if (!matDataDB["Hardware"])
+        matDataDB["Hardware"] = await proxy(ns, "corporation.getMaterialData", "Hardware")
+      if (!matDataDB["Robots"])
+        matDataDB["Robots"] = await proxy(ns, "corporation.getMaterialData", "Robots")
+      if (!matDataDB["AI Cores"])
+        matDataDB["AI Cores"] = await proxy(ns, "corporation.getMaterialData", "AI Cores")
+      if (!matDataDB["Real Estate"])
+        matDataDB["Real Estate"] = await proxy(ns, "corporation.getMaterialData", "Real Estate")
+      const matSizes = ["Hardware", "Robots", "AI Cores", "Real Estate"].map((mat) => matDataDB[mat].size)
+      let maxProd = await maxProduced(ns, div, city)
+      if (round < 3) maxProd *= 1.01
+      else maxProd *= 1.1
+      const warehouse = await proxy(ns, "corporation.getWarehouse", div, city)
+      //Start webworkers here
+      let worker = await getWorker(ns)
+      runningWorkers++
+      //Set up promise for when worker is done to run async
+      worker.onmessage = (msg) => {
+        //msg.data[x] should be:  0:results, 1:div, 2:city
+        results[msg.data[1] + msg.data[2]] = msg.data[0]
+        if (!globalThis["SphyxOSCorpWebWorkers"].includes(worker)) //On script kill, workersWIP gets dumped into storage as dirty - or directly
+          globalThis["SphyxOSCorpWebWorkers"].push({ workerReady: worker }) //That will fire on script kill, this could fire shortly after that
+        workersWIP = workersWIP.filter(w => w !== worker) //If it fires before, it will be empty when it gets dumped
+        worker = null
+        runningWorkers--
+      }
+      //Send data to worker now that we can handle the return
+      worker.postMessage([matSizes, divWeights, warehouse.size - maxProd, false, div, city])
+      workersWIP.push(worker)
+    }
+  }
+  //Wait for our workers to finish
+  while (runningWorkers > 0) await ns.asleep(4)
+
+  //Process the results
+  for (const div of industries) {
+    if (!hasDivDB[div]) continue
+    for (const city of cities) {
+      if (!hasWarehouseDB[div + city]) continue
+      //[Hardware, Robots, AI Cores, Real Estate]
+      const [hardware, robots, aicores, realestate] = results[div + city]
+      const hw = await proxy(ns, "corporation.getMaterial", div, city, "Hardware")
+      const hardwareStored = hw.stored
+      if (hardwareStored === hardware) {
+        await proxy(ns, "corporation.buyMaterial", div, city, "Hardware", 0)
+        await proxy(ns, "corporation.sellMaterial", div, city, "Hardware", 0, "MP")
+      }
+      else if (hardwareStored < hardware) {
+        if (round >= 4) await proxy(ns, "corporation.buyMaterial", div, city, "Hardware", (hardware - hardwareStored) / 10 / 10)
+        else await proxy(ns, "corporation.buyMaterial", div, city, "Hardware", (hardware - hardwareStored) / 10)
+        await proxy(ns, "corporation.sellMaterial", div, city, "Hardware", 0, "MP")
+      }
+      else {
+        if (round >= 4) {
+          await proxy(ns, "corporation.sellMaterial", div, city, "Hardware", (hardwareStored - hardware) / 10 / 10, "0")
+        }
+        else await proxy(ns, "corporation.sellMaterial", div, city, "Hardware", (hardwareStored - hardware) / 10, "MP")
+        await proxy(ns, "corporation.buyMaterial", div, city, "Hardware", 0)
+      }
+      const ro = await proxy(ns, "corporation.getMaterial", div, city, "Robots")
+      const robotsStored = ro.stored
+      if (robotsStored === robots) {
+        await proxy(ns, "corporation.buyMaterial", div, city, "Robots", 0)
+        await proxy(ns, "corporation.sellMaterial", div, city, "Robots", 0, "MP")
+      }
+      else if (robotsStored < robots) {
+        if (round >= 4) await proxy(ns, "corporation.buyMaterial", div, city, "Robots", (robots - robotsStored) / 10 / 10)
+        else await proxy(ns, "corporation.buyMaterial", div, city, "Robots", (robots - robotsStored) / 10)
+        await proxy(ns, "corporation.sellMaterial", div, city, "Robots", 0, "MP")
+      }
+      else {
+        if (round >= 4) {
+          await proxy(ns, "corporation.sellMaterial", div, city, "Robots", (robotsStored - robots) / 10 / 10, "0")
+        }
+        else await proxy(ns, "corporation.sellMaterial", div, city, "Robots", (robotsStored - robots) / 10, "MP")
+        await proxy(ns, "corporation.buyMaterial", div, city, "Robots", 0)
+      }
+      const ai = await proxy(ns, "corporation.getMaterial", div, city, "AI Cores")
+      const aiCoresStored = ai.stored
+      if (aiCoresStored === aicores) {
+        await proxy(ns, "corporation.buyMaterial", div, city, "AI Cores", 0)
+        await proxy(ns, "corporation.sellMaterial", div, city, "AI Cores", 0, "MP")
+      }
+      else if (aiCoresStored < aicores) {
+        if (round >= 4) await proxy(ns, "corporation.buyMaterial", div, city, "AI Cores", (aicores - aiCoresStored) / 10 / 10)
+        else await proxy(ns, "corporation.buyMaterial", div, city, "AI Cores", (aicores - aiCoresStored) / 10)
+        await proxy(ns, "corporation.sellMaterial", div, city, "AI Cores", 0, "MP")
+      }
+      else {
+        if (round >= 4) {
+          await proxy(ns, "corporation.sellMaterial", div, city, "AI Cores", (aiCoresStored - aicores) / 10 / 10, "0")
+        }
+        else await proxy(ns, "corporation.sellMaterial", div, city, "AI Cores", (aiCoresStored - aicores) / 10, "MP")
+        await proxy(ns, "corporation.buyMaterial", div, city, "AI Cores", 0)
+      }
+      const re = await proxy(ns, "corporation.getMaterial", div, city, "Real Estate")
+      const realEstateStored = re.stored
+      if (realEstateStored === realestate) {
+        await proxy(ns, "corporation.buyMaterial", div, city, "Real Estate", 0)
+        await proxy(ns, "corporation.sellMaterial", div, city, "Real Estate", 0, "MP")
+      }
+      else if (realEstateStored < realestate) {
+        if (round >= 4) await proxy(ns, "corporation.buyMaterial", div, city, "Real Estate", (realestate - realEstateStored) / 10 / 10)
+        else await proxy(ns, "corporation.buyMaterial", div, city, "Real Estate", (realestate - realEstateStored) / 10)
+        await proxy(ns, "corporation.sellMaterial", div, city, "Real Estate", 0, "MP")
+      }
+      else {
+        if (round >= 4) {
+          await proxy(ns, "corporation.sellMaterial", div, city, "Real Estate", (realEstateStored - realestate) / 10 / 10, "0")
+        }
+        else await proxy(ns, "corporation.sellMaterial", div, city, "Real Estate", (realEstateStored - realestate) / 10, "MP")
+        await proxy(ns, "corporation.buyMaterial", div, city, "Real Estate", 0)
+      }
+    }
+  }
+}
+/** @param {NS} ns */
+async function maxProduction(ns, div, city) {
+  if (!hasWarehouseDB[div + city]) return [0, 0]
+  const mult = await getMult(ns, div, city)
+  return [10 * mult[0], 10 * mult[1]]
+}
+/** @param {NS} ns */
+async function maxMatRequired(ns, div, city, matID) {
+  if (!hasDivDB[div]) return 0
+  if (!hasWarehouseDB[div + city]) return 0
+  let productMult = 0
+  if (indDataDB[hasDivDB[div].type] === undefined)
+    indDataDB[hasDivDB[div].type] = await proxy(ns, "corporation.getIndustryData", hasDivDB[div].type)
+  if (indDataDB[hasDivDB[div].type].makesProducts) {
+    let products = 0
+    const division = await proxy(ns, "corporation.getDivision", div)
+    for (const prod of division.products) {
+      const product = await proxy(ns, "corporation.getProduct", div, city, prod)
+      if (product.developmentProgress === 100)
+        products++
+    }
+    productMult = products
+  }
+  else productMult = 1
+
+  for (const [matName, mat] of Object.entries(indDataDB[hasDivDB[div].type].requiredMaterials)) {
+    if (matName !== matID) continue
+    // Smart supply
+    let required = 0
+    const mult = await getMult(ns, div, city)
+    if (hasDivDB[div].makesProducts) required += 10 * mult[1] * mat * productMult
+    if (indDataDB[hasDivDB[div].type].makesMaterials) required += 10 * mult[0] * mat
+    return required
+  } //End process purchase of materials
+  return 0
+}
+/** @param {NS} ns */
+async function maxProduced(ns, div, city) {
+  if (!hasWarehouseDB[div + city]) return 0
+  const mult = await getMult(ns, div, city)
+  const multMaterial = mult[0]
+  const multProduct = mult[1]
+  if (multMaterial === 0) return 0
+
+  let totalSize = 0
+  if (indDataDB[hasDivDB[div].type] === undefined)
+    indDataDB[hasDivDB[div].type] = await proxy(ns, "corporation.getIndustryData", hasDivDB[div].type)
+  for (const [matName, matAmount] of Object.entries(indDataDB[hasDivDB[div].type].requiredMaterials)) {
+    if (matDataDB[matName] === undefined)
+      matDataDB[matName] = await proxy(ns, "corporation.getMaterialData", matName)
+    totalSize += await maxMatRequired(ns, div, city, matName) * matDataDB[matName].size
+  }
+  if (indDataDB[hasDivDB[div].type].makesMaterials)
+    for (const mat of indDataDB[hasDivDB[div].type].producedMaterials) {
+      if (matDataDB[mat] === undefined)
+        matDataDB[mat] = await proxy(ns, "corporation.getMaterialData", mat)
+      totalSize += matDataDB[mat].size * 10 * multMaterial
+      const material = await proxy(ns, "corporation.getMaterial", div, city, mat)
+      totalSize += material.stored * matDataDB[mat].size
+    }
+  const division = await proxy(ns, "corporation.getDivision", div)
+  for (const prod of division.products) {
+    const product = await proxy(ns, "corporation.getProduct", div, city, prod)
+    if (product.developmentProgress === 100) {
+      totalSize += product.size * 10 * multProduct
+      totalSize += product.stored * product.size
+    }
+  }
+  return totalSize
+}
+/** @param {NS} ns */
+async function warehouseUpgrade(ns) {
+  const round = investOffer.round
+  let hasDiv2 = false
+  let count = 0
+  for (const city of cities)
+    if (hasWarehouseDB[div2 + city]) count++
+  if (count === 6)
+    hasDiv2 = true
+
+  let hasDiv3 = false
+  let cityCount = 0
+  for (const city of cities)
+    if (hasWarehouseDB[div3 + city]) cityCount++
+  if (cityCount === 6) hasDiv3 = true
+
+  while (count < 8) {
+    if (round >= 3) count++
+    let smartStorageIncrease = 0
+    const smartStorage = await proxy(ns, "corporation.getUpgradeLevel", "Smart Storage")
+    for (const div of industries) {
+      if (!hasDivDB[div]) continue
+      if (round === 2 && hasDivDB[div].type === "Chemical") continue
+      for (const city of cities) {
+        if (!hasWarehouseDB[div + city]) continue
+        const warehouse = await proxy(ns, "corporation.getWarehouse", div, city)
+        let divMult = researchedDB[div + "Drones - Transport"] ? 1.5 : 1
+        smartStorageIncrease += (warehouse.level * 100 * (1 + ((smartStorage + 1) * .1)) * divMult) - (warehouse.level * 100 * (1 + (smartStorage * .1)) * divMult)
+      }
+    }
+    const funds = await corpFunds(ns)
+    if ((hasDiv2 && smartStorage >= 30)
+      || (!hasDiv2 && smartStorage >= 10))
+      smartStorageIncrease = 0
+
+    let bestUpgradeType = "none"
+    let bestUpgradeCity = "none"
+    let bestUpgradeRatio = 0
+    let bestAgriCity = "none"
+    let bestAgriRatio = 0
+    let bestChemCity = "none"
+    let bestChemRatio = 0
+    let bestWaterCity = "none"
+    let bestWaterRatio = 0
+    let bestComputerCity = "none"
+    let bestComputerRatio = 0
+    let bestRefineryCity = "none"
+    let bestRefineryRatio = 0
+    let bestMiningCity = "none"
+    let bestMiningRatio = 0
+    const smartUpgrade = await proxy(ns, "corporation.getUpgradeLevelCost", "Smart Storage")
+    let smartRatio = smartStorageIncrease === 0 ? 0 : smartStorageIncrease / smartUpgrade
+
+    for (const div of industries) {
+      if (!hasDivDB[div]) continue
+      for (const city of cities) {
+        if (!hasWarehouseDB[div + city]) continue
+        const warehouse = await proxy(ns, "corporation.getWarehouse", div, city)
+        const wUpgrade = await proxy(ns, "corporation.getUpgradeWarehouseCost", div, city)
+        const smartStorageMult = 1 + (smartStorage * .1)
+        let divMult = researchedDB[div + "Drones - Transport"] ? 1.5 : 1
+        let warehouseIncrease = ((warehouse.level + 1) * 100 * smartStorageMult * divMult) - warehouse.size
+        let warehouseRatio = warehouseIncrease / wUpgrade
+        //if (round === 2 && (warehouse.level === 2 || !hasDiv2) && hasDivDB[div].type === "Chemical") warehouseRatio = 0 //Early break on Chemical warehouse upgrade until we get all of Chemical
+        if (hasDivDB[div].type === "Agriculture" && warehouseRatio > bestAgriRatio) {
+          bestAgriCity = city
+          bestAgriRatio = warehouseRatio
+        }
+        else if (hasDivDB[div].type === "Chemical" && warehouseRatio > bestChemRatio) {
+          bestChemCity = city
+          bestChemRatio = warehouseRatio
+        }
+        else if (hasDivDB[div].type === "Water Utilities" && warehouseRatio > bestWaterRatio) {
+          bestWaterCity = city
+          bestWaterRatio = warehouseRatio
+        }
+        else if (hasDivDB[div].type === "Computer Hardware" && warehouseRatio > bestComputerRatio) {
+          bestComputerCity = city
+          bestComputerRatio = warehouseRatio
+        }
+        else if (hasDivDB[div].type === "Refinery" && warehouseRatio > bestRefineryRatio) {
+          bestRefineryCity = city
+          bestRefineryRatio = warehouseRatio
+        }
+        else if (hasDivDB[div].type === "Mining" && warehouseRatio > bestMiningRatio) {
+          bestMiningCity = city
+          bestMiningRatio = warehouseRatio
+        }
+        const maxProd = await maxProduction(ns, div, city)
+        if (round >= 3 && hasDivDB[div].type === "Agriculture") {
+          if (maxProd[0] > await maxMatRequired(ns, div4, city, "Food") && maxProd[0] > (await maxMatRequired(ns, div2, city, "Plants") + await maxMatRequired(ns, div3, "Sector-12", "Plants")))
+            warehouseRatio = 0
+          else warehouseRatio *= .9
+        }
+        else if (round >= 3 && hasDivDB[div].type === "Chemical") {
+          if (maxProd[0] > await maxMatRequired(ns, div1, city, "Chemicals") || !hasDiv3)
+            warehouseRatio = 0
+          else warehouseRatio *= .9
+        }
+        else if (round >= 5 && hasDivDB[div].type === "Water Utilities") {
+          if (maxProd[0] > await maxMatRequired(ns, div1, city, "Water") + await maxMatRequired(ns, div2, city, "Water") + await maxMatRequired(ns, div4, city, "Water"))
+            warehouseRatio = 0
+          else warehouseRatio *= .9
+        }
+        else if (round >= 5 && hasDivDB[div].type === "Computer Hardware") {
+          if (maxProd[0] > await maxMatRequired(ns, div5, city, "Hardware") + await maxMatRequired(ns, div8, city, "Hardware"))
+            warehouseRatio = 0
+          else warehouseRatio *= .9
+        }
+        else if (round >= 5 && hasDivDB[div].type === "Refinery") {
+          if (maxProd[0] > await maxMatRequired(ns, div6, city, "Metal"))
+            warehouseRatio = 0
+          else warehouseRatio *= .9
+        }
+        else if (round >= 5 && hasDivDB[div].type === "Mining") {
+          if (maxProd[0] > await maxMatRequired(ns, div7, city, "Metal"))
+            warehouseRatio = 0
+          else warehouseRatio *= .9
+        }
+        else if (round === 2 && !hasDiv2 && hasDivDB[div].type === "Agriculture") {
+          warehouseRatio = 0
+          smartRatio = 0
+        }
+        else if (round === 2 && hasDiv2 && warehouse.level >= 20 && hasDivDB[div].type === "Agriculture") {
+          warehouseRatio = 0
+          smartRatio = 0
+        }
+        else if (round === 3 && !hasDiv3 && hasDivDB[div].type === "Agriculture") {
+          warehouseRatio = 0
+          smartRatio = 0
+        }
+        else if (round === 3 && !hasDiv3 && warehouse.level >= 3 && hasDivDB[div].type === "Chemical") {
+          warehouseRatio = 0
+          smartRatio = 0
+        }
+        else if (round === 3 && !hasDiv3 && hasDivDB[div].type === "Tobacco") {
+          warehouseRatio = 0
+          smartRatio = 0
+        }
+        else if (round === 2 && ((hasDivDB[div].type === "Chemical" && (warehouse.level === 2 || !hasDiv2)))) {
+          warehouseRatio = 0
+          smartRatio = 0
+        }
+        else if ((round >= 3) && ["Tobacco", "Restaurant"].includes(hasDivDB[div].type) && warehouse.level >= 5)
+          warehouseRatio = 0
+        //Round 2 - upgrade chem once
+        if (round === 2 && hasDivDB[div].type === "Chemical" && warehouse.level === 1) {
+          bestUpgradeType = div
+          bestUpgradeCity = city
+          bestUpgradeRatio = Infinity
+        }
+        else if (warehouseRatio > smartRatio && warehouseRatio > bestUpgradeRatio) {
+          bestUpgradeType = div
+          bestUpgradeCity = city
+          bestUpgradeRatio = warehouseRatio
+        }
+        else if (smartRatio > bestUpgradeRatio) {
+          bestUpgradeType = "Smart"
+          bestUpgradeRatio = smartRatio
+        }
+      }
+    }
+    if (!["Smart", "none"].includes(bestUpgradeType)) {
+      if (hasDivDB[bestUpgradeType].type === "Agriculture") {
+        bestUpgradeCity = bestAgriCity
+      }
+      else if (hasDivDB[bestUpgradeType].type === "Chemical") {
+        bestUpgradeCity = bestChemCity
+      }
+      else if (hasDivDB[bestUpgradeType].type === "Water Utilities") {
+        bestUpgradeCity = bestWaterCity
+      }
+      else if (hasDivDB[bestUpgradeType].type === "Computer Hardware") {
+        bestUpgradeCity = bestComputerCity
+      }
+      else if (hasDivDB[bestUpgradeType].type === "Refinery") {
+        bestUpgradeCity = bestRefineryCity
+      }
+      else if (hasDivDB[bestUpgradeType].type === "Mining") {
+        bestUpgradeCity = bestMiningCity
+      }
+    }
+    if (round >= 3) {
+      if (bestUpgradeType === "none") break
+      else if (bestUpgradeType === "Smart" && funds >= await proxy(ns, "corporation.getUpgradeLevelCost", "Smart Storage") * 1.5) {
+        await proxy(ns, "corporation.levelUpgrade", "Smart Storage")
+      }
+      else if (bestUpgradeCity !== "none" && funds >= await proxy(ns, "corporation.getUpgradeWarehouseCost", bestUpgradeType, bestUpgradeCity) * 1.5) {
+        await proxy(ns, "corporation.upgradeWarehouse", bestUpgradeType, bestUpgradeCity)
+      }
+      else break
+    }
+    else {
+      if (bestUpgradeType === "none") break
+      else if (bestUpgradeType === "Smart" && funds >= await proxy(ns, "corporation.getUpgradeLevelCost", "Smart Storage")) {
+        await proxy(ns, "corporation.levelUpgrade", "Smart Storage")
+      }
+      else if (bestUpgradeCity !== "none" && funds >= await proxy(ns, "corporation.getUpgradeWarehouseCost", bestUpgradeType, bestUpgradeCity)) {
+        await proxy(ns, "corporation.upgradeWarehouse", bestUpgradeType, bestUpgradeCity)
+      }
+      else break
+    }
+  }
+}
+/** @param {NS} ns */
+async function getSellPrice(ns, div, city, prod) {
+  const ta2 = ta2DB[div + city + prod]
+  if (ta2 === undefined || ta2.markupLimit === 0) return 0
+  const product = await proxy(ns, "corporation.getProduct", div, city, prod)
+  const prodMarketPrice = 5 * product.productionCost
+  return (((ta2.markupLimit * Math.sqrt(1)) / Math.sqrt(1)) + prodMarketPrice) * 10
+}
+/** @param {NS} ns */
+async function sell(ns) {
+  for (const div of industries) {
+    if (!hasDivDB[div]) continue
+    const hasMTAII = await proxy(ns, "corporation.hasResearched", div, "Market-TA.II")
+    for (const city of cities) {
+      if (!hasWarehouseDB[div + city]) continue
+      if (researchedDB["Market Research - Demand"] && researchedDB["Market Data - Competition"]) {
+        if (indDataDB[hasDivDB[div].type] === undefined)
+          indDataDB[hasDivDB[div].type] = await proxy(ns, "corporation.getIndustryData", hasDivDB[div].type)
+        if (indDataDB[hasDivDB[div].type].makesProducts) {
+          const division = await proxy(ns, "corporation.getDivision", div)
+          for (const prod of division.products) {
+            const product = await proxy(ns, "corporation.getProduct", div, city, prod)
+            if (product.developmentProgress !== 100 || product.stored === 0) continue
+            //Setting Market TA II if researchedDB
+            if (hasMTAII) { //I don't research it, but it could be there from manual purchase
+              await proxy(ns, "corporation.setProductMarketTA2", div, prod, true)
+              await proxy(ns, "corporation.sellProduct", div, city, prod, "MAX", "0")
+              continue
+            }
+
+            let ta2 = ta2DB[div + city + prod]
+            if (ta2 === undefined) { //No TA2 data
+              ta2DB[div + city + prod] = {
+                "sellingPrice": product.rating,
+                "sellingQuantity": product.stored,
+                "markupLimit": 0
+              }
+              await proxy(ns, "corporation.sellProduct", div, city, prod, "MAX", (product.rating).toString())
+              continue
+            }
+            const prodMarketPrice = 5 * product.productionCost
+            if (ta2.markupLimit === 0) { //Not calculated yet
+              const actualSellAmount = product.actualSellAmount
+              if (actualSellAmount >= ta2.sellingQuantity / 10) { // We failed to set it high enough.  Set it higher and try again
+                const oldSalePrice = ta2DB[div + city + prod].sellingPrice
+                ta2DB[div + city + prod].sellingPrice = oldSalePrice * 1000
+                ta2DB[div + city + prod].sellingQuantity = product.stored
+                await proxy(ns, "corporation.sellProduct", div, city, prod, "MAX", (oldSalePrice * 1000).toString())
+                continue
+              }
+              else if (actualSellAmount <= ta2.sellingQuantity / 10 * .15) { //Not enough sold, lower the price!
+                const oldSalePrice = ta2DB[div + city + prod].sellingPrice
+                ta2DB[div + city + prod].sellingPrice = oldSalePrice / 3
+                ta2DB[div + city + prod].sellingQuantity = product.stored
+                await proxy(ns, "corporation.sellProduct", div, city, prod, "MAX", (oldSalePrice / 3).toString())
+                continue
+              }
+              const mult = await getMult(ns, div, city)
+              const m = mult[1]
+              const markupLimit = (ta2.sellingPrice - prodMarketPrice) * Math.sqrt(actualSellAmount / m)
+              ta2DB[div + city + prod].markupLimit = markupLimit
+              ta2 = ta2DB[div + city + prod]
+            }
+            const prodStored = product.stored
+            let sellingPrice = (((ta2.markupLimit * Math.sqrt(prodStored)) / Math.sqrt(prodStored)) + prodMarketPrice) * 10
+            const priceMult = product.productionAmount / prodStored
+            if (priceMult !== Infinity) sellingPrice *= priceMult >= 1 ? 1 : priceMult
+            if (sellingPrice < 0 || isNaN(sellingPrice)) {
+              const oldSalePrice = ta2DB[div + city + prod].sellingPrice
+              ta2DB[div + city + prod].sellingPrice = oldSalePrice * 10
+              ta2DB[div + city + prod].sellingQuantity = prodStored
+              ta2DB[div + city + prod].markupLimit = 0
+              await proxy(ns, "corporation.sellProduct", div, city, prod, "MAX", (oldSalePrice * 10).toString())
+              continue
+            }
+            await proxy(ns, "corporation.sellProduct", div, city, prod, "MAX", sellingPrice.toString())
+          } //Products
+        } //Product check
+        if (indDataDB[hasDivDB[div].type].producedMaterials)
+          for (const mat of indDataDB[hasDivDB[div].type].producedMaterials) {
+            const material = await proxy(ns, "corporation.getMaterial", div, city, mat)
+            if (material.stored === 0) continue
+            let exported = 0
+            for (const xp of material.exports) {
+              const expoMat = await proxy(ns, "corporation.getMaterial", xp.division, xp.city, mat)
+              exported += expoMat.importAmount
+            }
+
+            //Set TA2 if we have it
+            if (researchedDB[div + "Market-TA.II"]) {
+              await proxy(ns, "corporation.setMaterialMarketTA2", div, city, mat, true)
+              await proxy(ns, "corporation.sellMaterial", div, city, mat, "MAX", "0")
+              continue
+            }
+            let ta2 = ta2DB[div + city + mat]
+            if (ta2 === undefined) { //No TA2 data              
+              ta2DB[div + city + mat] = {
+                "sellingPrice": material.marketPrice,
+                "sellingQuantity": material.stored + (exported * 10),
+                "markupLimit": 0
+              }
+              await proxy(ns, "corporation.sellMaterial", div, city, mat, "MAX", (material.marketPrice).toString())
+              continue
+            }
+            const prodMarketPrice = material.marketPrice
+            const mult = await getMult(ns, div, city)
+            const m = mult[0]
+            if (ta2.markupLimit === 0) { //Not calculated yet
+              const actualSellAmount = material.actualSellAmount
+              if (actualSellAmount >= (ta2.sellingQuantity) / 10) { // We failed to set it high enough.  Set it higher and try again
+                const oldSalePrice = ta2DB[div + city + mat].sellingPrice
+                ta2DB[div + city + mat].sellingPrice = oldSalePrice * 1.2
+                ta2DB[div + city + mat].sellingQuantity = material.stored + (exported * 10)
+                await proxy(ns, "corporation.sellMaterial", div, city, mat, "MAX", (oldSalePrice * 1.2).toString())
+                continue
+              }
+              else if (actualSellAmount <= (ta2.sellingQuantity) / 10 * .1) { //Not enough sold, lower the price!
+                const oldSalePrice = ta2DB[div + city + mat].sellingPrice
+                ta2DB[div + city + mat].sellingPrice = oldSalePrice * .9
+                ta2DB[div + city + mat].sellingQuantity = material.stored + (exported * 10)
+                await proxy(ns, "corporation.sellMaterial", div, city, mat, "MAX", (oldSalePrice * .9).toString())
+                continue
+              }
+              const markupLimit = (ta2.sellingPrice - prodMarketPrice) * Math.sqrt(actualSellAmount / m)
+              ta2DB[div + city + mat].markupLimit = markupLimit
+              ta2 = ta2DB[div + city + mat]
+            }
+            const prodStored = material.stored
+            let sellingPrice = (((ta2.markupLimit * Math.sqrt(prodStored)) / Math.sqrt(prodStored)) + prodMarketPrice) * 10
+            const priceMult = (material.productionAmount - exported) / prodStored
+            if (priceMult !== Infinity) sellingPrice *= priceMult >= 1 ? 1 : priceMult
+            if (sellingPrice < 0 || isNaN(sellingPrice)) {
+              const oldSalePrice = ta2DB[div + city + mat].sellingPrice
+              ta2DB[div + city + mat].sellingPrice = oldSalePrice * 2
+              ta2DB[div + city + mat].sellingQuantity = prodStored + (exported * 10)
+              ta2DB[div + city + mat].markupLimit = 0
+              await proxy(ns, "corporation.sellMaterial", div, city, mat, "MAX", (oldSalePrice * 2).toString())
+              continue
+            }
+            await proxy(ns, "corporation.sellMaterial", div, city, mat, "MAX", sellingPrice.toString())
+          }
+      } //TA2
+      else { // No TA2
+        if (!indDataDB[hasDivDB[div].type])
+          indDataDB[hasDivDB[div].type] = await proxy(ns, "corporation.getIndustryData", hasDivDB[div].type)
+        if (indDataDB[hasDivDB[div].type].producedMaterials) {
+          for (const mat of indDataDB[hasDivDB[div].type].producedMaterials) {
+            const material = await proxy(ns, "corporation.getMaterial", div, city, mat)
+            if (material.stored === 0) continue
+            const marketPrice = material.marketPrice
+            if (!matDataDB[mat])
+              matDataDB[mat] = await proxy(ns, "corporation.getMaterialData", mat)
+            let price = marketPrice + (material.quality / matDataDB[mat].baseMarkup)
+            const maxProd = await maxProduction(ns, div, city)
+            const priceMult = maxProd[0] / (material.stored)
+            price *= priceMult >= 1 ? 1 : priceMult >= .6 ? priceMult : priceMult / 10
+            await proxy(ns, "corporation.sellMaterial", div, city, mat, "MAX", price)
+          }
+        }
+      }
+    }
+  }
+}
+/** @param {NS} ns */
+async function getMult(ns, div, city) {
+  if (!hasOfficeDB[div + city]) return [0, 0] //[Material, Product]
+  const office = await proxy(ns, "corporation.getOffice", div, city)
+  const operationEmployeesProduction = office.employeeProductionByJob.Operations
+  const engineerEmployeesProduction = office.employeeProductionByJob.Engineer
+  const managementEmployeesProduction = office.employeeProductionByJob.Management
+  const totalEmployeesProduction = operationEmployeesProduction + engineerEmployeesProduction + managementEmployeesProduction;
+  if (totalEmployeesProduction <= 0) return [0, 0]
+  const managementFactor = 1 + managementEmployeesProduction / (1.2 * totalEmployeesProduction)
+  const employeesProductionMultiplier = (Math.pow(operationEmployeesProduction, 0.4) + Math.pow(engineerEmployeesProduction, 0.3)) * managementFactor;
+  const balancingMultiplier = 0.05;
+  const officeMultiplierProduct = 0.5 * balancingMultiplier * employeesProductionMultiplier;
+  const officeMultiplierMaterial = balancingMultiplier * employeesProductionMultiplier;
+
+  // Multiplier from Smart Factories
+  const upgradeMultiplier = 1 + (await proxy(ns, "corporation.getUpgradeLevel", "Smart Factories") * 0.03)
+  // Multiplier from researches
+  let researchMultiplier = 1
+  researchMultiplier *=
+    (researchedDB[div + "Drones - Assembly"] ? 1.2 : 1)
+    * (researchedDB[div + "Self-Correcting Assemblers"] ? 1.1 : 1);
+  if (hasDivDB[div].makesProducts) {
+    researchMultiplier *= (researchedDB[div + "uPgrade: Fulcrum"] ? 1.05 : 1);
+  }
+  let multSum = 0;
+  if (!indDataDB[hasDivDB[div].type])
+    indDataDB[hasDivDB[div].type] = await proxy(ns, "corporation.getIndustryData", hasDivDB[div].type)
+  for (const scity of cities) {
+    if (!hasWarehouseDB[div + scity]) continue
+    const real = await proxy(ns, "corporation.getMaterial", div, scity, "Real Estate")
+    const hard = await proxy(ns, "corporation.getMaterial", div, scity, "Hardware")
+    const robo = await proxy(ns, "corporation.getMaterial", div, scity, "Robots")
+    const ai = await proxy(ns, "corporation.getMaterial", div, scity, "AI Cores")
+    let realestate = Math.pow(0.002 * real.stored + 1, indDataDB[hasDivDB[div].type].realEstateFactor)
+    let hardware = Math.pow(0.002 * hard.stored + 1, indDataDB[hasDivDB[div].type].hardwareFactor)
+    let robots = Math.pow(0.002 * robo.stored + 1, indDataDB[hasDivDB[div].type].robotFactor)
+    let aicores = Math.pow(0.002 * ai.stored + 1, indDataDB[hasDivDB[div].type].aiCoreFactor);
+    if (isNaN(realestate)) realestate = 1
+    if (isNaN(hardware)) hardware = 1
+    if (isNaN(robots)) robots = 1
+    if (isNaN(aicores)) aicores = 1
+    const cityMult =
+      realestate *
+      hardware *
+      robots *
+      aicores
+    multSum += Math.pow(cityMult, 0.73);
+  }
+  const productionMult = multSum < 1 ? 1 : multSum
+  const multMaterial = officeMultiplierMaterial * productionMult * upgradeMultiplier * researchMultiplier
+  const multProduct = officeMultiplierProduct * productionMult * upgradeMultiplier * researchMultiplier
+  return [multMaterial, multProduct]
+}
+function clearLogs(ns) {
+  ns.clearLog()
+  if (win) win.clear()
+}
+function update(ns, text) {
+  ns.printRaw(text)
+  if (win && win.closed) {
+    win = false
+    ns.writePort(1, "puppet popout off")
+  }
+  if (win) win.update(text)
+}
+/** @param {NS} ns */
+async function updateHud(ns) {
+  clearLogs(ns)
+  const cObj = await proxy(ns, "corporation.getCorporation")
+  const bnMults = await getBNMults(ns)
+  update(ns, ns.sprintf("%s", cObj.name))
+  update(ns, ns.sprintf("Funds: $%s  Profit: $%s/s", fNumber(ns, cObj.funds, 3), fNumber(ns, cObj.revenue - cObj.expenses, 3)))
+  const invest = investOffer
+  const upgrades = await proxy(ns, "corporation.getUpgradeLevel", "Neural Accelerators")
+    + await proxy(ns, "corporation.getUpgradeLevel", "Project Insight")
+    + await proxy(ns, "corporation.getUpgradeLevel", "Nuoptimal Nootropic Injector Implants")
+    + await proxy(ns, "corporation.getUpgradeLevel", "FocusWires")
+    + await proxy(ns, "corporation.getUpgradeLevel", "Speech Processor Implants")
+    + await proxy(ns, "corporation.getUpgradeLevel", "FocusWires")
+  const offer = invest.round === 1 ? (round1Money * bnMults.CorporationValuation)
+    : invest.round === 2 ? (round2Money * bnMults.CorporationValuation)
+      : invest.round === 3 ? (round3Money * bnMults.CorporationValuation)
+        : invest.round === 4 ? (round4Money * bnMults.CorporationValuation)
+          : 0
+  const minRound = invest.round === 2 ? "-BareMin 30b" : ""
+  const produpgrades = await proxy(ns, "corporation.getUpgradeLevel", "Smart Factories") + await proxy(ns, "corporation.getUpgradeLevel", "Smart Storage")
+  update(ns, ns.sprintf("Round: %s  Offer: %s FundsReq: %s  %s", invest.round, fNumber(ns, invest.funds, 3), fNumber(ns, offer, 3), minRound))
+  update(ns, ns.sprintf("Empl Upgrades: %s  Prod Upgrades: %s  Profit Upgrades: %s  Wilson: %s", upgrades, produpgrades, await proxy(ns, "corporation.getUpgradeLevel", "ABC SalesBots"), await proxy(ns, "corporation.getUpgradeLevel", "Wilson Analytics")))
+  const state = cObj.nextState === "PURCHASE" ? "START"
+    : cObj.nextState === "PRODUCTION" ? "PURCHASE"
+      : cObj.nextState === "EXPORT" ? "PRODUCTION"
+        : cObj.nextState === "SALE" ? "EXPORT"
+          : "SALE"
+  update(ns, ns.sprintf("Stage: %s", state))
+  for (const div of industries) {
+    if (!hasDivDB[div]) continue
+    const division = await proxy(ns, "corporation.getDivision", div)
+    update(ns, ns.sprintf("-%s(%s)  Profit: $%s/s  Awareness: %s  Pop: %s", div, division.type, fNumber(ns, division.lastCycleRevenue - division.lastCycleExpenses, 3), fNumber(ns, division.awareness, 3), fNumber(ns, division.popularity, 3)))
+    let wCount = 0
+    let wSpace = 0
+    let wSpaceUsed = 0
+    let oCount = 0
+    let oEmployees = 0
+    let oSize = 0
+    for (const city of cities) {
+      if (!hasOfficeDB[div + city]) continue
+      if (hasWarehouseDB[div + city]) {
+        wCount++
+        const warehouse = await proxy(ns, "corporation.getWarehouse", div, city)
+        wSpace += warehouse.size
+        wSpaceUsed += warehouse.sizeUsed
+      }
+      try {
+        const office = await proxy(ns, "corporation.getOffice", div, city)
+        oEmployees += office.numEmployees
+        oCount++
+        oSize += office.size
+      }
+      catch { }
+    }
+    update(ns, ns.sprintf("  Warehouse Space: (%s/6) %s/%s  Office Usage: (%s/6) %s/%s  Research: %s", wCount, Math.round(wSpaceUsed), Math.round(wSpace), oCount, oEmployees, oSize, fNumber(ns, division.researchPoints, 3)))
+    if (indDataDB[hasDivDB[div].type] === undefined)
+      indDataDB[hasDivDB[div].type] = await proxy(ns, "corporation.getIndustryData", division.type)
+    if (indDataDB[hasDivDB[div].type].makesProducts) {
+      for (const product of division.products) {
+        const prod = await proxy(ns, "corporation.getProduct", div, "Sector-12", product)
+        const prog = prod.developmentProgress
+        const sellPrice = await getSellPrice(ns, div, "Sector-12", product)
+        if (prog === 100) {
+          if (sellPrice === 0) update(ns, ns.sprintf("  Calculating - %s", product))
+          else update(ns, ns.printf("  $%s - %s", fNumber(ns, await getSellPrice(ns, div, "Sector-12", product), 3), product))
+        }
+        else {
+          update(ns, ns.sprintf("  %s - %s", fNumber(ns, prog, 2), product))
+        }
+      }
+    }
+  }
+  ns.ui.renderTail()
 }
 
 /** @param {NS} ns */
-async function sleepWhileNotInStartState(ns, waitForNext = false) {
-    myCorporation = ns.corporation.getCorporation();
-    if (waitForNext) {
-        while (getCorpState(myCorporation) === 'START') {
-            if (ns.corporation.nextUpdate) await ns.corporation.nextUpdate();
-            else await ns.sleep(50);
-            myCorporation = ns.corporation.getCorporation();
-        }
+async function getCommands(ns) {
+  while (true) {
+    let silent = false
+    while (ns.peek(19) !== "NULL PORT DATA") {
+      let result = ns.readPort(19)
+      switch (result) {
+        case "Reset TAII":
+          if (!silent) ns.tprintf("Corp: Resetting TAII DB!")
+          ta2DB = []
+          break
+        case "popout":
+          if (!silent) ns.tprintf("Corp: Enabling pop out")
+          win = await makeNewWindow("Corp", ns.ui.getTheme())
+          break
+        case "nopopout":
+          if (!silent) ns.tprintf("Corp: Disabling pop out")
+          if (win) win.close()
+          win = false
+          break
+        case "Silent":
+          silent = true
+          break
+        default:
+          ns.tprintf("Invalid command received in corp: %s", result)
+          break;
+      }
     }
-    let lastState = 'Unknown';
-    while (getCorpState(myCorporation) !== 'START') {
-        const state = getCorpState(myCorporation);
-        if (verbose && state !== lastState) {
-            log(ns, `Waiting for corporation to move into the 'START' status. Currently: '${state}'.`);
-            lastState = state;
+    await ns.asleep(200)
+  }
+}
+async function getWorker(ns) {
+  if (globalThis["SphyxOSCorpWebWorkers"].length) {
+    const worker = globalThis["SphyxOSCorpWebWorkers"].shift()
+    if (worker?.workerReady) return worker.workerReady
+    return new Promise((resolve) => {
+      worker.onmessage = (event) => {
+        if (event.data?.type === "reset-complete") {
+          //ns.tprintf("corp Worker recycled and ready!")
+          resolve(worker)
         }
-        if (ns.corporation.nextUpdate) await ns.corporation.nextUpdate();
-        else await ns.sleep(50); // Better keep the sleep short, in case we're in catch-up mode.
-        myCorporation = ns.corporation.getCorporation();
-    }
-    myCorporation = ns.corporation.getCorporation();
+      }
+      worker.postMessage({ type: "reset" })
+    })
+  }
+  const worker = new Worker(URL.createObjectURL(blob))
+  //ns.tprintf("corp Worker newly created!")
+  return worker
 }
 
-/**
- * Buy the specified number of seats, and hire employees to fill them.
- * @param {NS} ns
- * @param {string} divisionName
- * @param {string} city
- * @param {number} seats
- * @returns {boolean} returns true on success
- */
-async function upgradeOfficeSize(ns, divisionName, city, seats) {
-    // First buy the new seats.
-    let success = false;
+const workerCode = `
+function optimizeCorpoMaterials_raw(matSizes, divWeights, spaceConstraint, round) {
+  let p = divWeights.reduce((a, b) => a + b, 0);
+  let w = matSizes.reduce((a, b) => a + b, 0);
+  let r = [];
+  for (let i = 0; i < matSizes.length; ++i) {
+    let m = (spaceConstraint - 500 * ((matSizes[i] / divWeights[i]) * (p - divWeights[i]) - (w - matSizes[i]))) / (p / divWeights[i]) / matSizes[i];
+    if (divWeights[i] <= 0 || m < 0) {
+      return optimizeCorpoMaterials_raw(matSizes.toSpliced(i, 1), divWeights.toSpliced(i, 1), spaceConstraint, round).toSpliced(i, 0, 0);
+    } else {
+      if (round) m = Math.round(m);
+      r.push(m);
+    }
+  }
+  return r;
+}
+//event.data[x] should be:  0:matSizes, 1:divWeights, 2:spaceContraint, 3:round, 4:div, 5:city
+onmessage = (event) => {
+  if (event.data?.type === "reset") {
+    postMessage({ type: "reset-complete" })
+    return
+  }
+  postMessage([optimizeCorpoMaterials_raw(event.data[0], event.data[1], event.data[2], event.data[3]), event.data[4], event.data[5]]);
+}
+`
+const blob = new Blob([workerCode], { type: "application/javascript" })
+//Ram dodged functions below and their file writes
+async function proxy(ns, func, ...argmnts) { return await runIt(ns, "/Temp/corporation-sphyx-nsProxy.js", ns.getFunctionRamCost(func) + 1.6, [func, ...argmnts]) }
+async function getBNMults(ns) { return await runIt(ns, "/Temp/corporation-sphyx-bnmults.js", 0, []) }
+
+/** @param {NS} ns */
+async function runIt(ns, script, scriptOverride, argmnts) {
+  let thispid = 0
+  let threads = 1
+  const scriptRam = scriptOverride === 0 ? ns.getScriptRam(script) : scriptOverride
+
+  const threadsOnHome = Math.floor((ns.getServerMaxRam("home") - ns.getServerUsedRam("home")) / scriptRam)
+  if (threadsOnHome >= 1) {
+    thispid = ns.exec(script, "home", { ramOverride: scriptRam, threads: 1, temporary: true }, ...argmnts)
+    if (thispid > 0)
+      threads--
+  }
+  if (threads >= 1) {
+    const servers = getServersLight(ns)
+    for (const server of servers) {
+      if (!ns.hasRootAccess(server)) continue
+      const tmpramavailable = ns.getServerMaxRam(server) - ns.getServerUsedRam(server)
+      const threadsonserver = Math.floor(tmpramavailable / scriptRam)
+      // How many threads can we run?  If we can run something, do it
+      if (threadsonserver <= 0) continue
+      ns.scp([script], server, "home")
+      thispid = ns.exec(script, server, { ramOverride: scriptRam, threads: 1, temporary: true }, ...argmnts)
+      if (thispid === 0) continue
+      threads--
+      break
+    }// All servers
+  }
+  if (threads >= 1) ns.tprintf("Failed to allocate all threads for script: %s", script)
+  await ns.nextPortWrite(thispid)
+  const result = ns.readPort(thispid)
+  return result
+}
+
+/** @param {NS} ns */
+function getServersLight(ns) {
+  const serverList = new Set(["home"])
+  for (const server of serverList) {
+    for (const connection of ns.scan(server)) {
+      serverList.add(connection)
+    }
+  }
+  return Array.from(serverList)
+}
+/** @param {NS} ns */
+function writeProxy(ns) {
+  const data = `/** @param {NS} ns */
+export async function main(ns) {
+  ns.disableLog("ALL")
+  let [func, ...argmnts] = ns.args
+  let nsFunction = ns
+  for (let prop of func.split(".")) nsFunction = nsFunction[prop]
+  let finalResult
+  try {
+    const result = nsFunction(...argmnts)
+    if (result instanceof Promise) finalResult = await result
+    else if (result instanceof Object) {
+      promiseRemoval(result)
+      finalResult = result
+    }
+    else finalResult = result
+  } catch { } //finalResult is undefined if it failed to run.
+  ns.atExit(() => ns.writePort(ns.pid, finalResult))
+}
+function promiseRemoval(object) {
+  for (const key in object)
+    if (object[key] instanceof Promise) delete object[key]
+    else if (object[key] instanceof Object) promiseRemoval(object[key])
+}`
+  ns.write("/Temp/corporation-sphyx-nsProxy.js", data, "w")
+}
+
+function writeBNMults(ns) {
+  const data = `/** @param {NS} ns */
+export async function main(ns) {
+  const port = ns.getPortHandle(ns.pid)
+  let mults;
+  try { mults = ns.getBitNodeMultipliers() }
+  catch {
+    const resetInfo = ns.getResetInfo()
+    let record = {
+      "AgilityLevelMultiplier": 1,
+      "AugmentationMoneyCost": 1,
+      "AugmentationRepCost": 1,
+      "BladeburnerRank": 1,
+      "BladeburnerSkillCost": 1,
+      "CharismaLevelMultiplier": 1,
+      "ClassGymExpGain": 1,
+      "CodingContractMoney": 1,
+      "CompanyWorkExpGain": 1,
+      "CompanyWorkMoney": 1,
+      "CompanyWorkRepGain": 1,
+      "CorporationValuation": 1,
+      "CrimeExpGain": 1,
+      "CrimeMoney": 1,
+      "CrimeSuccessRate": 1,
+      "DaedalusAugsRequirement": 30,
+      "DefenseLevelMultiplier": 1,
+      "DexterityLevelMultiplier": 1,
+      "FactionPassiveRepGain": 1,
+      "FactionWorkExpGain": 1,
+      "FactionWorkRepGain": 1,
+      "FourSigmaMarketDataApiCost": 1,
+      "FourSigmaMarketDataCost": 1,
+      "GangSoftcap": 1,
+      "GangUniqueAugs": 1,
+      "GoPower": 1,
+      "HackExpGain": 1,
+      "HackingLevelMultiplier": 1,
+      "HackingSpeedMultiplier": 1,
+      "HacknetNodeMoney": 1,
+      "HomeComputerRamCost": 1,
+      "InfiltrationMoney": 1,
+      "InfiltrationRep": 1,
+      "ManualHackMoney": 1,
+      "CloudServerCost": 1,//Old
+      "CloudServerCost": 1,//New
+      "CloudServerSoftcap": 1,//Old
+      "CloudServerSoftcap": 1,//New
+      "CloudServerLimit": 1,//Old
+      "CloudServerLimit": 1,//New
+      "CloudServerMaxRam": 1,//Old
+      "CloudServerMaxRam": 1,//New
+      "FavorToDonateToFaction": 1, //New
+      "FavorToDonateToFaction": 1, //Old
+      "ScriptHackMoney": 1,
+      "ScriptHackMoneyGain": 1,
+      "ServerGrowthRate": 1,
+      "ServerMaxMoney": 1,
+      "ServerStartingMoney": 1,
+      "ServerStartingSecurity": 1,
+      "ServerWeakenRate": 1,
+      "StrengthLevelMultiplier": 1,
+      "StaneksGiftPowerMultiplier": 1,
+      "StaneksGiftExtraSize": 0,
+      "WorldDaemonDifficulty": 1,
+      "CorporationSoftcap": 1,
+      "CorporationDivisions": 1
+    }
+    switch (resetInfo.currentNode) {
+      case 1:
+        break
+      case 2:
+        record.HackingLevelMultiplier = 0.8
+        record.ServerGrowthRate = 0.8
+        record.ServerStartingMoney = 0.4
+        record.CloudServerSoftcap = 1.3
+        record.CrimeMoney = 3
+        record.FactionPassiveRepGain = 0
+        record.FactionWorkRepGain = 0.5
+        record.CorporationSoftcap = 0.9
+        record.CorporationDivisions = 0.9
+        record.InfiltrationMoney = 3
+        record.StaneksGiftPowerMultiplier = 2
+        record.StaneksGiftExtraSize = -6
+        record.WorldDaemonDifficulty = 5
+        break
+      case 3:
+        record.HackingLevelMultiplier = 0.8
+        record.ServerGrowthRate = 0.2
+        record.ServerMaxMoney = 0.04
+        record.ServerStartingMoney = 0.2
+        record.HomeComputerRamCost = 1.5
+        record.CloudServerCost = 2
+        record.CloudServerCost = 2
+        record.CloudServerSoftcap = 1.3
+        record.CloudServerSoftcap = 1.3
+        record.CompanyWorkMoney = 0.25
+        record.CrimeMoney = 0.25
+        record.HacknetNodeMoney = 0.25
+        record.ScriptHackMoney = 0.2
+        record.FavorToDonateToFaction = 0.5 //New
+        record.FavorToDonateToFaction = 0.5 //Old
+        record.AugmentationMoneyCost = 3
+        record.AugmentationRepCost = 3
+        record.GangSoftcap = 0.9
+        record.GangUniqueAugs = 0.5
+        record.StaneksGiftPowerMultiplier = 0.75
+        record.StaneksGiftExtraSize = -2
+        record.WorldDaemonDifficulty = 2
+        break
+      case 4:
+        record.ServerMaxMoney = 0.1125
+        record.ServerStartingMoney = 0.75
+        record.CloudServerSoftcap = 1.2
+        record.CompanyWorkMoney = 0.1
+        record.CrimeMoney = 0.2
+        record.HacknetNodeMoney = 0.05
+        record.ScriptHackMoney = 0.2
+        record.ClassGymExpGain = 0.5
+        record.CompanyWorkExpGain = 0.5
+        record.CrimeExpGain = 0.5
+        record.FactionWorkExpGain = 0.5
+        record.HackExpGain = 0.4
+        record.FactionWorkRepGain = 0.75
+        record.GangUniqueAugs = 0.5
+        record.StaneksGiftPowerMultiplier = 1.5
+        record.StaneksGiftExtraSize = 0
+        record.WorldDaemonDifficulty = 3
+        break
+      case 5:
+        record.ServerStartingSecurity = 2
+        record.ServerStartingMoney = 0.5
+        record.CloudServerSoftcap = 1.2
+        record.CrimeMoney = 0.5
+        record.HacknetNodeMoney = 0.2
+        record.ScriptHackMoney = 0.15
+        record.HackExpGain = 0.5
+        record.AugmentationMoneyCost = 2
+        record.InfiltrationMoney = 1.5
+        record.InfiltrationRep = 1.5
+        record.CorporationValuation = 0.75
+        record.CorporationDivisions = 0.75
+        record.GangUniqueAugs = 0.5
+        record.StaneksGiftPowerMultiplier = 1.3
+        record.StaneksGiftExtraSize = 0
+        record.WorldDaemonDifficulty = 1.5
+        break
+      case 6:
+        record.HackingLevelMultiplier = 0.35
+        record.ServerMaxMoney = 0.2
+        record.ServerStartingMoney = 0.5
+        record.ServerStartingSecurity = 1.5
+        record.CloudServerSoftcap = 2
+        record.CompanyWorkMoney = 0.5
+        record.CrimeMoney = 0.75
+        record.HacknetNodeMoney = 0.2
+        record.ScriptHackMoney = 0.75
+        record.HackExpGain = 0.25
+        record.InfiltrationMoney = 0.75
+        record.CorporationValuation = 0.2
+        record.CorporationSoftcap = 0.9
+        record.CorporationDivisions = 0.8
+        record.GangSoftcap = 0.7
+        record.GangUniqueAugs = 0.2
+        record.DaedalusAugsRequirement = 35
+        record.StaneksGiftPowerMultiplier = 0.5
+        record.StaneksGiftExtraSize = 2
+        record.WorldDaemonDifficulty = 2
+        break
+      case 7:
+        record.HackingLevelMultiplier = 0.35
+        record.ServerMaxMoney = 0.2
+        record.ServerStartingMoney = 0.5
+        record.ServerStartingSecurity = 1.5
+        record.CloudServerSoftcap = 2
+        record.CompanyWorkMoney = 0.5
+        record.CrimeMoney = 0.75
+        record.HacknetNodeMoney = 0.2
+        record.ScriptHackMoney = 0.5
+        record.HackExpGain = 0.25
+        record.AugmentationMoneyCost = 3
+        record.InfiltrationMoney = 0.75
+        record.FourSigmaMarketDataCost = 2
+        record.FourSigmaMarketDataApiCost = 2
+        record.CorporationValuation = 0.2
+        record.CorporationSoftcap = 0.9
+        record.CorporationDivisions = 0.8
+        record.BladeburnerRank = 0.6
+        record.BladeburnerSkillCost = 2
+        record.GangSoftcap = 0.7
+        record.GangUniqueAugs = 0.2
+        record.DaedalusAugsRequirement = 35
+        record.StaneksGiftPowerMultiplier = 0.9
+        record.StaneksGiftExtraSize = -1
+        record.WorldDaemonDifficulty = 2
+        break
+      case 8:
+        record.CloudServerSoftcap = 4
+        record.CompanyWorkMoney = 0
+        record.CrimeMoney = 0
+        record.HacknetNodeMoney = 0
+        record.ManualHackMoney = 0
+        record.ScriptHackMoney = 0.3
+        record.ScriptHackMoneyGain = 0
+        record.CodingContractMoney = 0
+        record.FavorToDonateToFaction = 0 //New
+        record.FavorToDonateToFaction = 0 //Old
+        record.InfiltrationMoney = 0
+        record.CorporationValuation = 0
+        record.CorporationSoftcap = 0
+        record.CorporationDivisions = 0
+        record.BladeburnerRank = 0
+        record.GangSoftcap = 0
+        record.GangUniqueAugs = 0
+        record.StaneksGiftExtraSize = -99
+        break
+      case 9:
+        record.HackingLevelMultiplier = 0.5
+        record.StrengthLevelMultiplier = 0.45
+        record.DefenseLevelMultiplier = 0.45
+        record.DexterityLevelMultiplier = 0.45
+        record.AgilityLevelMultiplier = 0.45
+        record.CharismaLevelMultiplier = 0.45
+        record.ServerMaxMoney = 0.01
+        record.ServerStartingMoney = 0.1
+        record.ServerStartingSecurity = 2.5
+        record.HomeComputerRamCost = 5
+        record.CloudServerLimit = 0
+        record.CrimeMoney = 0.5
+        record.ScriptHackMoney = 0.1
+        record.HackExpGain = 0.05
+        record.FourSigmaMarketDataCost = 5
+        record.FourSigmaMarketDataApiCost = 4
+        record.CorporationValuation = 0.5
+        record.CorporationSoftcap = 0.75
+        record.CorporationDivisions = 0.8
+        record.BladeburnerRank = 0.9
+        record.BladeburnerSkillCost = 1.2
+        record.GangSoftcap = 0.8
+        record.GangUniqueAugs = 0.25
+        record.StaneksGiftPowerMultiplier = 0.5
+        record.StaneksGiftExtraSize = 2
+        record.WorldDaemonDifficulty = 2
+        break
+      case 10:
+        record.HackingLevelMultiplier = 0.35
+        record.StrengthLevelMultiplier = 0.4
+        record.DefenseLevelMultiplier = 0.4
+        record.DexterityLevelMultiplier = 0.4
+        record.AgilityLevelMultiplier = 0.4
+        record.CharismaLevelMultiplier = 0.4
+        record.HomeComputerRamCost = 1.5
+        record.CloudServerCost = 5
+        record.CloudServerSoftcap = 1.1
+        record.CloudServerLimit = 0.6
+        record.CloudServerMaxRam = 0.5
+        record.CloudServerCost = 5
+        record.CloudServerSoftcap = 1.1
+        record.CloudServerLimit = 0.6
+        record.CloudServerMaxRam = 0.5
+        record.CompanyWorkMoney = 0.5
+        record.CrimeMoney = 0.5
+        record.HacknetNodeMoney = 0.5
+        record.ManualHackMoney = 0.5
+        record.ScriptHackMoney = 0.5
+        record.CodingContractMoney = 0.5
+        record.AugmentationMoneyCost = 5
+        record.AugmentationRepCost = 2
+        record.InfiltrationMoney = 0.5
+        record.CorporationValuation = 0.5
+        record.CorporationSoftcap = 0.9
+        record.CorporationDivisions = 0.9
+        record.BladeburnerRank = 0.8
+        record.GangSoftcap = 0.9
+        record.GangUniqueAugs = 0.25
+        record.StaneksGiftPowerMultiplier = 0.75
+        record.StaneksGiftExtraSize = -3
+        record.WorldDaemonDifficulty = 2
+        break
+      case 11:
+        record.HackingLevelMultiplier = 0.6
+        record.ServerGrowthRate = 0.2
+        record.ServerMaxMoney = 0.01
+        record.ServerStartingMoney = 0.1
+        record.ServerWeakenRate = 2
+        record.CloudServerSoftcap = 2
+        record.CompanyWorkMoney = 0.5
+        record.CrimeMoney = 3
+        record.HacknetNodeMoney = 0.1
+        record.CodingContractMoney = 0.25
+        record.HackExpGain = 0.5
+        record.AugmentationMoneyCost = 2
+        record.InfiltrationMoney = 2.5
+        record.InfiltrationRep = 2.5
+        record.FourSigmaMarketDataCost = 4
+        record.FourSigmaMarketDataApiCost = 4
+        record.CorporationValuation = 0.1
+        record.CorporationSoftcap = 0.9
+        record.CorporationDivisions = 0.9
+        record.GangUniqueAugs = 0.75
+        record.WorldDaemonDifficulty = 1.5
+        break
+      case 12:
+        const sourceFiles = []
+        for (const item of ns.getResetInfo().ownedSF) {
+          const record = {
+            "n": item[0],
+            "lvl": item[1]
+          }
+          sourceFiles.push(record)
+        }
+        let SF12LVL = 1
+        for (const sf of sourceFiles) {
+          if (sf.n === 12) {
+            SF12LVL = sf.lvl + 1
+            break
+          }
+        }
+        const inc = Math.pow(1.02, SF12LVL)
+        const dec = 1 / inc
+
+        record.DaedalusAugsRequirement = Math.floor(Math.min(record.DaedalusAugsRequirement + inc, 40))
+        record.HackingLevelMultiplier = dec
+        record.StrengthLevelMultiplier = dec
+        record.DefenseLevelMultiplier = dec
+        record.DexterityLevelMultiplier = dec
+        record.AgilityLevelMultiplier = dec
+        record.CharismaLevelMultiplier = dec
+        record.ServerGrowthRate = dec
+        record.ServerMaxMoney = dec * dec
+        record.ServerStartingMoney = dec
+        record.ServerWeakenRate = dec
+        record.ServerStartingSecurity = 1.5
+        record.HomeComputerRamCost = inc
+        record.CloudServerCost = inc
+        record.CloudServerSoftcap = inc
+        record.CloudServerLimit = dec
+        record.CloudServerMaxRam = dec
+        record.CloudServerCost = inc
+        record.CloudServerSoftcap = inc
+        record.CloudServerLimit = dec
+        record.CloudServerMaxRam = dec
+        record.CompanyWorkMoney = dec
+        record.CrimeMoney = dec
+        record.HacknetNodeMoney = dec
+        record.ManualHackMoney = dec
+        record.ScriptHackMoney = dec
+        record.CodingContractMoney = dec
+        record.ClassGymExpGain = dec
+        record.CompanyWorkExpGain = dec
+        record.CrimeExpGain = dec
+        record.FactionWorkExpGain = dec
+        record.HackExpGain = dec
+        record.FactionPassiveRepGain = dec
+        record.FactionWorkRepGain = dec
+        record.FavorToDonateToFaction = inc
+        record.AugmentationMoneyCost = inc
+        record.AugmentationRepCost = inc
+        record.InfiltrationMoney = dec
+        record.InfiltrationRep = dec
+        record.FourSigmaMarketDataCost = inc
+        record.FourSigmaMarketDataApiCost = inc
+        record.CorporationValuation = dec
+        record.CorporationSoftcap = 0.8
+        record.CorporationDivisions = 0.5
+        record.BladeburnerRank = dec
+        record.BladeburnerSkillCost = inc
+        record.GangSoftcap = 0.8
+        record.GangUniqueAugs = dec
+        record.StaneksGiftPowerMultiplier = inc
+        record.StaneksGiftExtraSize = inc
+        record.WorldDaemonDifficulty = inc
+        break
+      case 13:
+        record.HackingLevelMultiplier = 0.25
+        record.StrengthLevelMultiplier = 0.7
+        record.DefenseLevelMultiplier = 0.7
+        record.DexterityLevelMultiplier = 0.7
+        record.AgilityLevelMultiplier = 0.7
+        record.CloudServerSoftcap = 1.6
+        record.ServerMaxMoney = 0.3375
+        record.ServerStartingMoney = 0.75
+        record.ServerStartingSecurity = 3
+        record.CompanyWorkMoney = 0.4
+        record.CrimeMoney = 0.4
+        record.HacknetNodeMoney = 0.4
+        record.ScriptHackMoney = 0.2
+        record.CodingContractMoney = 0.4
+        record.ClassGymExpGain = 0.5
+        record.CompanyWorkExpGain = 0.5
+        record.CrimeExpGain = 0.5
+        record.FactionWorkExpGain = 0.5
+        record.HackExpGain = 0.1
+        record.FactionWorkRepGain = 0.6
+        record.FourSigmaMarketDataCost = 10
+        record.FourSigmaMarketDataApiCost = 10
+        record.CorporationValuation = 0.001
+        record.CorporationSoftcap = 0.4
+        record.CorporationDivisions = 0.4
+        record.BladeburnerRank = 0.45
+        record.BladeburnerSkillCost = 2
+        record.GangSoftcap = 0.3
+        record.GangUniqueAugs = 0.1
+        record.StaneksGiftPowerMultiplier = 2
+        record.StaneksGiftExtraSize = 1
+        record.WorldDaemonDifficulty = 3
+        break
+      case 14:
+        record.GoPower = 4
+        record.HackingLevelMultiplier = 0.4
+        record.HackingSpeedMultiplier = 0.3
+        record.ServerMaxMoney = 0.7
+        record.ServerStartingMoney = 0.5
+        record.ServerStartingSecurity = 1.5
+        record.CrimeMoney = 0.75
+        record.CrimeSuccessRate = 0.4
+        record.HacknetNodeMoney = 0.25
+        record.ScriptHackMoney = 0.3
+        record.StrengthLevelMultiplier = 0.5
+        record.DexterityLevelMultiplier = 0.5
+        record.AgilityLevelMultiplier = 0.5
+        record.AugmentationMoneyCost = 1.5
+        record.InfiltrationMoney = 0.75
+        record.FactionWorkRepGain = 0.2
+        record.CompanyWorkRepGain = 0.2
+        record.CorporationValuation = 0.4
+        record.CorporationSoftcap = 0.9
+        record.CorporationDivisions = 0.8
+        record.BladeburnerRank = 0.6
+        record.BladeburnerSkillCost = 2
+        record.GangSoftcap = 0.7
+        record.GangUniqueAugs = 0.4
+        record.StaneksGiftPowerMultiplier = 0.5
+        record.StaneksGiftExtraSize = -1
+        record.WorldDaemonDifficulty = 5
+        break
+    }
+    mults = record
+  }
+  ns.atExit(() => port.write(mults))
+}
+`
+  ns.write("/Temp/corporation-sphyx-bnmults.js", data, "w")
+}
+
+function fNumber(ns, num, fraction = 3, suffix = 1000, isInt = false) {
+  if (ns.ui.getGameInfo()?.versionNumber >= 44) return ns.format.number(num, fraction, suffix, isInt)
+  else return ns.formatNumber(num, fraction, suffix, isInt)
+}
+const cities = ["Sector-12", "Aevum", "Volhaven", "Chongqing", "New Tokyo", "Ishima"]
+const industries = [div1, div2, div3, div4, div5, div6, div7, div8]
+const cigaretts = ["Pall Mall", "Camel", "Marlboro", "Kool", "American Spirit", "Bastos", "Philip Morris", "USA Gold", "Winston", "Backwoods Smokes", "Capstan", "Chesterfield", "Davidoff", "Maverick", "Newport", "Black Devil", "Dunhill", "Rothman\'s"]
+const burgers = ["Double Bacon Cheeseburger", "Plain Hamburger", "Pickle Burger", "Onion Burger", "Turkey Burger", "Mozza Burger", "Chili Cheeseburger", "Tropical Burger", "The BLT", "Spicy Extreem Burger", "Deconstructed Burger", "Junior Delux"]
+const hardwares = ["Home Entertainment Threater", "Next-Gen Graphics Card", "Portable Soldering Kit (PSK)", "Advanced Micro-Fluidics Home Kit", "xPhone MAX", "Hyper-RAM", "Superior xDisplay", "A Lamp (It's just a lamp)", "Personal Electric Transportation ULTRA"]
+
+let slp = ms => new Promise(r => setTimeout(r, ms));
+async function makeNewWindow(title = "Default Window Title", theme) {
+  //  let win = open("", title.replaceAll(" ", "_"), "popup=yes,height=200,width=500,left=100,top=100,resizable=yes,scrollbars=no,toolbar=no,menubar=no,location=no,directories=no,status=no");
+  let win = open("main.bundle.js", title.replaceAll(" ", "_"), "popup=yes,height=200,width=500,left=100,top=100,resizable=yes,scrollbars=no,toolbar=no,menubar=no,location=no,directories=no,status=no");
+  let good = false;
+  let doc = 0;
+  while (!good) {
+    await slp(1000);
     try {
-        if (seats > 0) ns.corporation.upgradeOfficeSize(divisionName, city, seats);
-        success = true;
-    } catch (e) {
-        log(ns, `ERROR: Failed to upgrade office size by ${seats} seats in ${city}.`);
-        log(ns, `ERROR: ${e}`);
+      doc = win["document"];
+      doc.head.innerHTML = "No.";
+      good = true;
+    } catch {
+      good = false;
     }
-    if (!success) return false;
-
-    /**
-     * Now that we have more office space, we need to hire and assign workers. Since
-     * worker assignment takes a long time, add them to a queue and we'll handle it
-     * later.
-     */
-    fillSpaceQueue.push(`${divisionName}/${city}`);
-
-    return true;
-}
-
-async function fillOpenPositionsFromQueue(ns) {
-    myCorporation = ns.corporation.getCorporation();
-    fillSpaceQueue = [...new Set(fillSpaceQueue)]; // Unique
-    // Try not to run past the end of a cycle..
-    while (['START'].includes(getCorpState(myCorporation)) && fillSpaceQueue.length > 0) {
-        let office = fillSpaceQueue.shift();
-        let divisionName = office.split('/')[0];
-        let cityName = office.split('/')[1];
-        await fillOpenPositions(ns, divisionName, cityName);
-        myCorporation = ns.corporation.getCorporation();
+  }
+  await slp(200);
+  doc.head.innerHTML = `
+  <title>${title}</title>
+  <style>
+    *{
+      margin:0;
     }
-}
-
-/**
- * Fill any open positions with employees.
- * @param {NS} ns
- * @param {string} divisionName
- * @param {string} cityName
- */
-async function fillOpenPositions(ns, divisionName, cityName) {
-    if (options.mock) return;
-    let office = ns.corporation.getOffice(divisionName, cityName);
-    let openJobs = office.size - office.numEmployees;
-    for (let i = 0; i < openJobs; i++) {
-        ns.corporation.hireEmployee(divisionName, cityName);
+    body{
+      background:` + theme['backgroundprimary'] + `;
+      color:` + theme['primary'] + `;
+      overflow:hidden;
+      height:100vh;
+      width:100vw;
+      font-family: "Hack Regular Nerd Font Complete", "Lucida Console", "Lucida Sans Unicode", "Fira Mono", Consolas, "Courier New", Courier, monospace, "Times New Roman";
+      display:flex;
+      flex-direction:column;
     }
-    office = ns.corporation.getOffice(divisionName, cityName);
-    if (office.numEmployees > 0) {
-        if (verbose) log(ns, `Assigning ${office.numEmployees} employees to work in ${divisionName}/${cityName}`);
-        let employeesPerJob = Math.floor(office.numEmployees / jobs.length);
-        let employeesLeft = office.numEmployees % jobs.length;
-        for (let i = 0; i < jobs.length; i++) {
-            const job = jobs[i];
-            let num = employeesPerJob;
-            if (i < employeesLeft) num++;
-            // if (verbose) log(ns, `Assigning ${num} employees to work as ${job} in ${cityName}`);
-            await ns.corporation.setJobAssignment(divisionName, cityName, job, num);
-        }
+    td{
+      background:` + theme['backgroundsecondary'] + `;
+      color:` + theme['primary'] + `;
+      font-family: "Hack Regular Nerd Font Complete", "Lucida Console", "Lucida Sans Unicode", "Fira Mono", Consolas, "Courier New", Courier, monospace, "Times New Roman";
     }
-}
-
-/**
- * Attempt to find a reasonablly stable price for each product. This will take several production cycles to stabilize.
- * @param {NS} ns
- */
-async function doPriceDiscovery(ns) {
-    if (verbose) log(ns, ``);
-    if (verbose) log(ns, `Doing price discovery for products.`);
-    myCorporation = ns.corporation.getCorporation();
-    for (const division of getCorpDivisions(ns)) {
-        const industry = getIndustry(division);
-        // If we have Market-TA.II researched, just let that work.
-        let hasMarketTA2 = ns.corporation.hasResearched(division.name, 'Market-TA.II');
-        if (hasMarketTA2) {
-            for (const city of division.cities) {
-                // Default prices
-                industry.prodMats.forEach((material) => ns.corporation.sellMaterial(division.name, city, material, 'MAX', 'MP'));
-                division.products.forEach((product) => ns.corporation.sellProduct(division.name, city, product, 'MAX', 'MP'));
-                // Turn on automation.
-                industry.prodMats.forEach((material) => ns.corporation.setMaterialMarketTA2(division.name, city, material, true));
-                division.products.forEach((product) => ns.corporation.setProductMarketTA2(division.name, product, true));
-            }
-            // No need to do any other price discovery on this division.
-            continue;
-        }
-
-        // Materials are easy. Just sell them for Market price.
-        for (const materialName of industry.prodMats) {
-            for (const city of division.cities) {
-                ns.corporation.sellMaterial(division.name, city, materialName, 'PROD', 'MP');
-            }
-        }
-
-        // Go through each product, and see if the price needs to be adjusted. We can only
-        // adjust the price on a per-product basis (desipe the UI letting you do it
-        // manually, the API is busted.)
-        let prevProductMultiplier = 1.0;
-        for (const productName of division.products) {
-            const productCity = getDivisionProductCity(division);
-            const product = getProduct(ns, division.name, productName, productCity);
-            if (product.developmentProgress < 100) continue;
-            let sPrice = `${product.desiredSellPrice}`;
-            // sPrice ought to be of the form 'MP * 123.45'. If not, we should use the price of the last product we calculated.
-            let lastPriceMultiplier = parseProductPriceMultiplier(sPrice, prevProductMultiplier);
-            let votes = [];
-            for (const city of division.cities) {
-                // Each city is going to "vote" for how they want the price to be manipulated.
-                const cityStats = getProductCityStats(ns, division.name, productName, city);
-                let qty = cityStats.qty;
-                let produced = cityStats.produced;
-                let sold = cityStats.sold;
-                // if (verbose) log(ns, `${division.name}/${city}:${product.name} (qty, prod, sold): ${[qty, produced, sold].map((n) => nf(n))}`);
-
-                if (produced == sold && qty == 0) {
-                    // We sold every item we produced. Vote to double the price.
-                    votes.push(lastPriceMultiplier * 2);
-                }
-                // If we've accumulated a big stockpile, reduce our prices.
-                else if (qty > produced * 100) {
-                    votes.push(lastPriceMultiplier * 0.9);
-                } else if (qty > produced * 40) {
-                    votes.push(lastPriceMultiplier * 0.95);
-                } else if (qty > produced * 20) {
-                    votes.push(lastPriceMultiplier * 0.98);
-                }
-                // Our stock levels must be good. If we sold less than production, then our price is probably high
-                else if (sold < produced) {
-                    let newMultiplier = lastPriceMultiplier;
-                    if (sold <= produced * 0.5) {
-                        newMultiplier *= 0.75; // Our price is very high.
-                    } else if (sold <= produced * 0.9) {
-                        newMultiplier *= 0.95; // Our price is a bit high.
-                    } else {
-                        newMultiplier *= 0.99; // Our price is just barely high
-                    }
-                    votes.push(newMultiplier);
-                }
-                // If we sold more than production, then our price is probably low.
-                else if (produced < sold) {
-                    let newMultiplier = lastPriceMultiplier;
-                    if (sold >= produced * 2) {
-                        newMultiplier *= 2; // We sold way too much. Double the price.
-                    } else if (sold >= produced * 1.33) {
-                        newMultiplier *= 1.05; // We sold a bit too much. Bring the price up a bit.
-                    } else {
-                        newMultiplier *= 1.01;
-                    }
-                    votes.push(newMultiplier);
-                }
-            } // end for-cities
-            // All of the cities have voted. Use the lowest price that the cities have asked for.
-            votes = votes.filter((vote) => Number.isFinite(vote) && vote > 0);
-            if (votes.length == 0) {
-                log(ns, `WARNING: No valid price votes for '${productName}'. Resetting price to MP.`);
-                ns.corporation.sellProduct(division.name, productCity, productName, 'MAX', 'MP', true);
-                prevProductMultiplier = 1.0;
-                continue;
-            }
-            votes.sort((a, b) => a - b);
-            let newMultiplier = Math.max(0.001, votes[0]);
-            let newPrice = `MP*${newMultiplier.toFixed(3)}`;
-            // if (verbose) log(ns, `${prefix}Votes: ${votes.map((n) => nf(n)).join(', ')}.`);
-            let sChange = percentChange(lastPriceMultiplier, newMultiplier);
-            if (verbose) log(ns, `    Adjusting '${productName}' price from ${sPrice} to ${newPrice} (${sChange}).`);
-            try {
-                ns.corporation.sellProduct(division.name, productCity, productName, 'MAX', newPrice, true);
-            } catch (err) {
-                log(ns, `WARNING: Failed to set '${productName}' price to ${newPrice}; resetting to MP. ${err}`);
-                ns.corporation.sellProduct(division.name, productCity, productName, 'MAX', 'MP', true);
-                newMultiplier = 1.0;
-            }
-            prevProductMultiplier = newMultiplier;
-        } // end for-products
-    } // end for-divisions
-    if (verbose) log(ns, ``);
-}
-
-function parseProductPriceMultiplier(price, fallback = 1.0) {
-    if (typeof price != 'string') return fallback;
-    const match = price.match(/MP\s*\*\s*([0-9]*\.?[0-9]+)/i);
-    if (!match) return fallback;
-    const multiplier = Number.parseFloat(match[1]);
-    return Number.isFinite(multiplier) && multiplier > 0 ? multiplier : fallback;
-}
-
-/**
- * Expand to a new city and fill the newly-opened office positions.
- * @param {NS} ns
- * @param {string} divisionName
- * @param {string} cityName
- */
-async function doExpandCity(ns, divisionName, cityName) {
-    ns.corporation.expandCity(divisionName, cityName);
-    fillSpaceQueue.push(`${divisionName}/${cityName}`);
-}
-
-/**
- * Spend hashes on something, as long as we have hacknet servers unlocked and a bit of money in the bank.
- * @param {NS} ns
- * @param {string} spendOn 'Sell for Corporation Funds' | 'Exchange for Corporation Research'
- */
-async function doSpendHashes(ns, spendOn) {
-    // Make sure we have a decent amount of money ($100m) before spending hashes this way.
-    if (ns.getPlayer().money > 100e6 && 9 in dictSourceFiles) {
-        let spentHashes = 0;
-        let shortName = spendOn;
-        if (spendOn === 'Sell for Corporation Funds') shortName = '$1B of corporate funding';
-        else if (spendOn === 'Exchange for Corporation Research') shortName = '1000 research for each corporate division';
-        do {
-            let numHashes = ns.hacknet.numHashes();
-            ns.hacknet.spendHashes(spendOn);
-            spentHashes = numHashes - ns.hacknet.numHashes();
-            if (spentHashes > 0) log(ns, `  Spent ${nf(Math.round(spentHashes / 100) * 100)} hashes on ${shortName}`, 'success');
-        } while (spentHashes > 0);
+    a{
+      color:` + theme['primary'] + `;
+      font-family: "Hack Regular Nerd Font Complete", "Lucida Console", "Lucida Sans Unicode", "Fira Mono", Consolas, "Courier New", Courier, monospace, "Times New Roman";
     }
-}
-
-/**
- * Log a message. Optionally, pop up a toast. Optionally, print to the terminal.
- * @param {NS} ns
- * @param {string} log message to log
- * @param {string} toastStyle
- * @param {boolean} printToTerminal
- */
-function log(ns, log, toastStyle, printToTerminal) {
-    ns.print(log);
-    if (toastStyle) ns.toast(log, toastStyle);
-    if (printToTerminal) ns.tprint(log);
-}
-
-/**
- * Assuming a product is named Industry-XX.XX, where XX.XX is the log10() of the budget.
- * @param {string} projectName
- * @returns {number} - the budget
- */
-function budgetFromProductName(projectName) {
-    let sExp = projectName.split('-')[1];
-    let exp = Number.parseFloat(sExp);
-    let budget = Math.pow(10, exp);
-    return budget;
-}
-
-function getOfficeProductivity(office, forProduct = false) {
-    const employeeProduction = office.employeeProductionByJob;
-    const opProd = employeeProduction.Operations;
-    const engrProd = employeeProduction.Engineer;
-    const mgmtProd = employeeProduction.Management;
-    const total = opProd + engrProd + mgmtProd;
-    if (total <= 0) return 0;
-
-    const mgmtFactor = 1 + mgmtProd / (1.2 * total);
-    const prod = (Math.pow(opProd, 0.4) + Math.pow(engrProd, 0.3)) * mgmtFactor;
-    const balancingMult = 0.05;
-
-    if (forProduct) return 0.5 * balancingMult * prod;
-    else return balancingMult * prod;
-}
-
-/**
- * Return the percentage change from from oldVal to NewVal.
- * @param {number} oldVal
- * @param {number} newVal
- * @returns {string} formatted as "+99.9%"
- */
-function percentChange(oldVal, newVal) {
-    let percentChange = (newVal / oldVal) * 100 - 100;
-    let sChange = nf(percentChange) + '%';
-    if (percentChange >= 0) sChange = '+' + sChange;
-    return sChange;
+    warning{
+      color:` + theme['error'] + `;
+      font-family: "Hack Regular Nerd Font Complete", "Lucida Console", "Lucida Sans Unicode", "Fira Mono", Consolas, "Courier New", Courier, monospace, "Times New Roman";
+    }
+    .title{
+      font-size:20px;
+      text-align:center;
+      flex: 0 0;
+      display:flex;
+      align-items:center;
+      border-bottom:1px solid white;
+    }
+    .scrollQuery{
+      font-size:12px;
+      margin-left:auto;
+    }
+    .logs{
+      width:100%;
+      flex: 1;
+      overflow-y:scroll;
+      font-size:14px;
+      white-space:normal;
+    }
+    .logs::-webkit-scrollbar,::-webkit-scrollbar-corner{
+      background:` + theme['button'] + `;
+      width:10px;
+      height:10px;
+    }
+    .logs::-webkit-scrollbar-button{
+      width:0px;
+      height:0px;
+    }
+    .logs::-webkit-scrollbar-thumb{
+      background:` + theme['primary'] + `;
+    }
+  </style>`;
+  doc.body.innerHTML = `<div class=title>${title}</div><div class=logs><p></p></div>`;
+  win.clear = () => {
+    win["document"].body.querySelector(".logs").innerHTML = "";
+  }
+  win.header = (content) => {
+    win["document"].body.innerHTML = `<div class=title>${content}</div><div class=logs><p></p></div>`;
+  }
+  win.update = (content) => {
+    win["document"].body.querySelector(".logs").innerHTML = win["document"].body.querySelector(".logs").innterHTML === "" ? content.replaceAll(" ", "&nbsp;").replaceAll("\r", "<br>").replaceAll("\n", "<br>") : win["document"].body.querySelector(".logs").innerHTML + `<br>` + content.replaceAll(" ", "&nbsp;").replaceAll("\r", "<br>").replaceAll("\n", "<br>");
+  }
+  win.reopen = () => open("", title.replaceAll(" ", "_"), "popup=yes,height=200,width=500,left=100,top=100,resizable=yes,scrollbars=no,toolbar=no,menubar=no,location=no,directories=no,status=no");
+  win.focus()
+  return win;
 }
