@@ -45,6 +45,7 @@ const argsSchema = [
     ['disable-grafting', false], // Disable grafting automation launch in autopilot mode.
     ['disable-rush-gangs', false], // Disable rush-gang work-for-factions mode in autopilot mode.
     ['disable-bladeburner', false], // Relay autopilot bladeburner disablement to managed helpers.
+    ['disable-puppet', false], // Use the legacy hack.js batcher instead of the default puppet.js (Sphyxis Puppet2) saturation batcher.
     ['cross-city-background-training', true], // Let work-for-factions start gym training in one city and then travel elsewhere for infiltration.
     ['disable-cross-city-background-training', false], // Disable cross-city background gym training.
     ['late-netburners', false], // Enable late-game Netburners/hacknet faction mode.
@@ -285,6 +286,17 @@ export async function main(ns) {
         args = setOrReplaceArg(args, "--double-reserve-threshold", Number.MAX_SAFE_INTEGER);
         if (!openTailWindows && !args.includes("--no-tail-windows"))
             args.push("--no-tail-windows");
+        return args;
+    }
+
+    // Default batcher is puppet.js (Sphyxis Puppet2 saturation batcher). Pass --disable-puppet to fall back to the legacy hack.js engine.
+    function usePuppetBatcher() { return !options['disable-puppet']; }
+    function getBatcherToolName() { return usePuppetBatcher() ? 'puppet.js' : 'hack.js'; }
+    function getManagedBatcherArgs(ns) {
+        if (!usePuppetBatcher()) return getManagedHackArgs(ns);
+        // puppet.js owns hacking only; let daemon's host-manager handle server purchases. Run quiet unless tail windows are enabled.
+        const args = ['nopurchase'];
+        if (!openTailWindows) args.push('quiet');
         return args;
     }
 
@@ -616,7 +628,7 @@ export async function main(ns) {
         };
         asynchronousHelpers = [
             ...(shouldPrioritizeFactionWork() ? [workForFactionsHelper] : []),
-            { name: "hack.js", args: () => getManagedHackArgs(ns), shouldTail: false, restartOnArgsChange: true, relaunchIfExited: true, ignoreReservedRam: false }, // Dedicated hacking/prep/targeting runner split out from daemon orchestration.
+            { name: getBatcherToolName(), args: () => getManagedBatcherArgs(ns), shouldTail: false, restartOnArgsChange: true, relaunchIfExited: true, ignoreReservedRam: false }, // Dedicated hacking/prep/targeting runner (puppet.js by default, hack.js with --disable-puppet).
             { name: "stats.js", shouldRun: () => reqRam(64), shouldTail: false }, // Adds stats not usually in the HUD (nice to have)
             ...(!shouldPrioritizeFactionWork() ? [workForFactionsHelper] : []),
             { name: "go.js", shouldRun: async () => !isMoneyFocusSpendingLocked() && !(await isWorkForFactionsPending()) && reqRam(64) && homeServer.ramAvailable(/*ignoreReservedRam:*/true) >= 20, minRamReq: 20.2, shouldTail: options['tail-go'] }, // Play go.js (various multipliers, but large dynamic ram requirements)
@@ -764,7 +776,7 @@ export async function main(ns) {
 
         // If we ascended less than 10 minutes ago, start with some study and/or XP cycles to quickly restore hack XP
         const timeSinceLastAug = Date.now() - resetInfo.lastAugReset;
-        const shouldKickstartHackXp = !options['money-focus'] && (playerHackSkill() < 500 && timeSinceLastAug < 600000 && reqRam(16)); // RamReq ensures we don't attempt this in BN1.1
+        const shouldKickstartHackXp = !usePuppetBatcher() && !options['money-focus'] && (playerHackSkill() < 500 && timeSinceLastAug < 600000 && reqRam(16)); // RamReq ensures we don't attempt this in BN1.1 (puppet.js has no study/XP kickstart)
         studying = shouldKickstartHackXp ? true : false; // Flag will be used to prevent focus-stealing scripts from running until hack.js is done studying.
         if (studying)
             focusReservedUntil = Date.now() + 5000 + 1000 * (options['initial-study-time'] + options['initial-hack-xp-time']);
@@ -983,7 +995,7 @@ export async function main(ns) {
             await getPlayerInfo(ns);
             if (studying && Date.now() >= focusReservedUntil)
                 studying = false;
-            const hackRunner = asynchronousHelpers.find(tool => scriptBaseName(tool.name) == 'hack.js');
+            const hackRunner = asynchronousHelpers.find(tool => scriptBaseName(tool.name) == getBatcherToolName());
             if (hackRunner && !whichServerIsRunning(ns, hackRunner.name, false)[0]) {
                 hackRunner.isLaunched = false;
                 allHelpersRunning = false;
