@@ -51,6 +51,7 @@ const preCasinoBlockedScripts = [
 const earlyBootstrapBlockedScripts = [
     'daemon.js',
     'hack.js',
+    'puppet.js', // Default daemon batcher (Sphyxis Puppet2 port); block/kill alongside hack.js during early bootstrap.
     'work-for-factions.js',
     'stockmaster.js',
     'sleeve.js',
