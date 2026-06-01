@@ -273,16 +273,16 @@ function update_hud(ns) {
   ns.clearLog()
   ns.printf("%s[%s] - (%s)", TARGET.hostname, BMODE, BATCHINFO.Type)
   if (TARGET.hostname !== NEXTTARGET.hostname) ns.printf("Next: %s  Zerglings: %s/%s", NEXTTARGET.hostname, ZERGSENT, ZERGREQUIRED)
-  ns.printf("%s/%s(%s) Batches: %s  Take: $%s", THREADSMAX - THREADSLEFT, THREADSMAX, THREADSLEFT, BATCHESRUN + 1, ns.formatNumber(BATCHINFO.Take * (BATCHESRUN + 1) * PREPH1 / BATCHINFO.H1))
-  ns.printf("HackP: %s%s ($%s/each)  Chance: %s%s", Math.round(BATCHINFO.HackP * 10000 * PREPH1) / 100, "%", ns.formatNumber(BATCHINFO.Take * PREPH1 / BATCHINFO.H1), ns.formatNumber(BATCHINFO.Chance * 100, 2), "%")
+  ns.printf("%s/%s(%s) Batches: %s  Take: $%s", THREADSMAX - THREADSLEFT, THREADSMAX, THREADSLEFT, BATCHESRUN + 1, ns.format.number(BATCHINFO.Take * (BATCHESRUN + 1) * PREPH1 / BATCHINFO.H1))
+  ns.printf("HackP: %s%s ($%s/each)  Chance: %s%s", Math.round(BATCHINFO.HackP * 10000 * PREPH1) / 100, "%", ns.format.number(BATCHINFO.Take * PREPH1 / BATCHINFO.H1), ns.format.number(BATCHINFO.Chance * 100, 2), "%")
   ns.printf("Prep Wave: W:%s G:%s W:%s H:%s W:%s G:%s W:%s", PREPW1, PREPG1, PREPW2, PREPH1, PREPW3, PREPG2, PREPW4)
   ns.printf("Batching Composition: H:%s W:%s G:%s W:%s", BATCHINFO.H1, BATCHINFO.W1, BATCHINFO.G1, BATCHINFO.W2)
-  ns.printf("%s  Countdown: %s", "$" + profitPerSecond(ns, WEAKENTIME, BATCHINFO.Take * BATCHINFO.H1 / PREPH1, BATCHESRUN + 1), ns.tFormat((WEAKENTIME + ENDTIME) - performance.now()))
-  ns.printf("Preptime : %s", ns.tFormat(BETWEENEND - BETWEENSTART, true))
-  ns.printf("Loadtime : %s", ns.tFormat(ENDTIME - STARTTIME, true))
-  ns.printf("Batchtime: %s", ns.tFormat(WEAKENTIME, true))
+  ns.printf("%s  Countdown: %s", "$" + profitPerSecond(ns, WEAKENTIME, BATCHINFO.Take * BATCHINFO.H1 / PREPH1, BATCHESRUN + 1), ns.format.time((WEAKENTIME + ENDTIME) - performance.now()))
+  ns.printf("Preptime : %s", ns.format.time(BETWEENEND - BETWEENSTART, true))
+  ns.printf("Loadtime : %s", ns.format.time(ENDTIME - STARTTIME, true))
+  ns.printf("Batchtime: %s", ns.format.time(WEAKENTIME, true))
 
-  if (AUTOBUYHACKNET) ns.printf("Auto Buy Hash: %s", AUTOHASHTIMER - performance.now() > 0 ? ns.tFormat(AUTOHASHTIMER - performance.now()) : "Next Up")
+  if (AUTOBUYHACKNET) ns.printf("Auto Buy Hash: %s", AUTOHASHTIMER - performance.now() > 0 ? ns.format.time(AUTOHASHTIMER - performance.now()) : "Next Up")
 }
 
 /** @param {NS} ns */
@@ -679,7 +679,7 @@ function profitPerSecond(ns, tm, take, batches) {
   tm = tm / 1000
   //Profit per second
   let profit = (take / tm) * batches
-  return tm === 0 || isNaN(profit) ? 0 + "/s" : (ns.formatNumber(profit, 2) + "/s")
+  return tm === 0 || isNaN(profit) ? 0 + "/s" : (ns.format.number(profit, 2) + "/s")
 }
 /** @param {NS} ns **/
 function getOptimalTarget(ns) {
@@ -1101,25 +1101,25 @@ function serverPurchaser(ns) {
   let upgradecost = 1e150
   const startRam = 2
   // Iterator we'll use for our loop
-  let i = ns.getPurchasedServers().length
-  if (ns.getPurchasedServerLimit() === 0) return
+  let i = ns.cloud.getServerNames().length
+  if (ns.cloud.getServerLimit() === 0) return
 
   //Buy the base servers
-  while (i < ns.getPurchasedServerLimit()) {
+  while (i < ns.cloud.getServerLimit()) {
     // Check if we have enough money to purchase a server
-    if (ns.getServerMoneyAvailable("home") >= ns.getPurchasedServerCost(startRam)) {
-      const server = i >= 10 ? ns.purchaseServer("pserv-" + i, startRam) : ns.purchaseServer("pserv-0" + i, startRam);
+    if (ns.getServerMoneyAvailable("home") >= ns.cloud.getServerCost(startRam)) {
+      const server = i >= 10 ? ns.cloud.purchaseServer("pserv-" + i, startRam) : ns.cloud.purchaseServer("pserv-0" + i, startRam);
       ns.scp(WORKER_W, server, "home")
       ns.scp(WORKER_G, server, "home")
       ns.scp(WORKER_H, server, "home")
       i++;
     }
     else {
-      upgradecost = ns.getPurchasedServerCost(startRam)
+      upgradecost = ns.cloud.getServerCost(startRam)
       return upgradecost
     }
   }
-  const servers = ns.getPurchasedServers()
+  const servers = ns.cloud.getServerNames()
 
   //Cycle through every server.  Check each attribute for cost of upgrade
   //Upgrade the cheapest.  Keep upgrading indefinitally
@@ -1130,14 +1130,14 @@ function serverPurchaser(ns) {
   //Check all servers
   for (const server of servers) {
     //Get the cheapest one and document it
-    if (ns.getPurchasedServerUpgradeCost(server, ns.getServerMaxRam(server) * 2) < upgradecost) {
-      upgradecost = ns.getPurchasedServerUpgradeCost(server, ns.getServerMaxRam(server) * 2)
+    if (ns.cloud.getServerUpgradeCost(server, ns.cloud.getRamLimit(server) * 2) < upgradecost) {
+      upgradecost = ns.cloud.getServerUpgradeCost(server, ns.cloud.getRamLimit(server) * 2)
       upgradeitem = server
-      ramupgrade = ns.getServerMaxRam(server) * 2
+      ramupgrade = ns.cloud.getRamLimit(server) * 2
     }
   }
   //upgrade the server if we can
-  if (ns.getServerMoneyAvailable("home") >= upgradecost) ns.upgradePurchasedServer(upgradeitem, ramupgrade)
+  if (ns.getServerMoneyAvailable("home") >= upgradecost) ns.cloud.upgradeServer(upgradeitem, ramupgrade)
   else {
     upgradecost = upgradecost === Number.POSITIVE_INFINITY ? 0 : upgradecost
   }

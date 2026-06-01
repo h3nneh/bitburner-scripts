@@ -17,7 +17,7 @@ const argsSchema = [
 
     ['xp-only', false], // Focus on a strategy that produces the most hack EXP rather than money
     ['share', undefined], // Enable sharing free RAM to boost faction rep gain (auto-enabled at 1TB network RAM)
-    ['no-share', false], // Disable sharing free RAM to boost faction rep gain
+    ['no-share', true], // Disable sharing free RAM to boost faction rep gain
     ['share-max-utilization', 0.8], // Share threads fill up to this fraction of total network RAM
     ['share-cooldown', 5000], // ms between share scheduling attempts
     ['money-focus', false], // Relay to hack.js to prioritize money and skip hack-XP kickstarts.
@@ -295,7 +295,7 @@ export async function main(ns) {
     function getManagedBatcherArgs(ns) {
         if (!usePuppetBatcher()) return getManagedHackArgs(ns);
         // puppet.js owns hacking only; let daemon's host-manager handle server purchases. Run quiet unless tail windows are enabled.
-        const args = ['nopurchase'];
+        const args = []; //['nopurchase'];
         if (!openTailWindows) args.push('quiet');
         return args;
     }
@@ -758,7 +758,7 @@ export async function main(ns) {
             {   // Periodically look to purchase new servers, but note that these are often not a great use of our money (hack income isn't everything) so we may hold-back.
                 interval: 32000, name: "host-manager.js", minRamReq: 6.55,
                 // Restrict spending on new servers (i.e. temporary RAM for the current augmentation only) to be a % of total earned hack income.
-                shouldRun: () => shouldImproveHacking() && getHostManagerBudget() > 0,
+                shouldRun: () => false && shouldImproveHacking() && getHostManagerBudget() > 0,
                 args: () => ['--budget', getHostManagerBudget(), '--absolute-reserve', reservedMoney(ns),
                     // Mechanic to reserve more of our money the longer we've been in the BN. Starts at 0%, after 24h we should be reserving 92%.
                     '--reserve-by-time', true, '--reserve-by-time-decay-factor', 0.1, '--reserve-percent', 0,
