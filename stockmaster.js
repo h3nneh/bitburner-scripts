@@ -3,12 +3,14 @@ import {
     instanceCount, getConfiguration, getNsDataThroughFile, runCommand, getActiveSourceFiles, tryGetBitNodeMultipliers,
     formatMoney, formatNumberShort, formatDuration, getStockSymbols
 } from './helpers.js'
+import { buildStockServerMap, writeStockPositions, clearStockPositions } from './stock-coordination.js'
 
 let disableShorts = false;
 let commission = 100000; // Buy/sell commission. Expected profit must exceed this to buy anything.
 let totalProfit = 0.0; // We can keep track of how much we've earned since start.
 let lastLog = ""; // We update faster than the stock-market ticks, but we don't log anything unless there's been a change
 let allStockSymbols = null; // Stores the set of all symbols collected at start
+let stockServerMap = null; // symbol -> owning server hostname, for stock-manipulation consumers (puppet/darknet)
 let mock = false; // If set to true, will "mock" buy/sell but not actually buy/sell anythingorecast
 let noisy = false; // If set to true, tprints and announces each time stocks are bought/sold
 // Pre-4S configuration (influences how we play the stock market before we have 4S data, after which everything's fool-proof)
@@ -94,6 +96,7 @@ export async function main(ns) {
         }
         log(ns, 'INFO: Checking for and liquidating any stocks...', false, 'info');
         await liquidate(ns); // Sell all stocks
+        try { await clearStockPositions(ns); } catch { /* non-fatal */ } // Tell manipulation consumers to stop
         return;
     } // Otherwise, prevent multiple instances of this script from being started, even with different args.
     if ((await instanceCount(ns)) > 1) return;
@@ -149,6 +152,10 @@ export async function main(ns) {
     allStockSymbols = await getStockSymbols(ns);
     allStocks = await initAllStocks(ns);
     bitNodeMults = await tryGetBitNodeMultipliers(ns);
+    // Build the symbol -> server map once, so puppet/darknet can manipulate prices of stocks we hold.
+    try { stockServerMap = await buildStockServerMap(ns, allStockSymbols); }
+    catch (err) { log(ns, `WARNING: Could not build stock symbol->server map (stock manipulation will be disabled): ` +
+        (typeof err === 'string' ? err : err.message || JSON.stringify(err)), false, 'warning'); stockServerMap = {}; }
 
     if (showMarketSummary) await launchSummaryTail(ns); // Opens a separate script / window to continuously display the Pre4S forecast
 
@@ -170,6 +177,8 @@ export async function main(ns) {
             // Check whether we have 4s access yes (once we do, we can stop checking)
             if (pre4s) pre4s = !(await checkAccess(ns, "has4SDataTixApi"));
             const holdings = await refresh(ns, !pre4s, allStocks, myStocks); // Returns total stock value
+            // Publish current positions for stock-manipulation consumers (puppet.js / darknet-worker.js).
+            if (stockServerMap) try { await writeStockPositions(ns, allStocks, stockServerMap); } catch { /* non-fatal */ }
             const corpus = holdings + playerStats.money; // Corpus means total stocks + cash
             const maxHoldings = (1 - fracH) * corpus; // The largest value of stock we could hold without violiating fracH (Fraction to keep as cash)
             if (pre4s && !mock && await tryGet4SApi(ns, playerStats, corpus * (options['buy-4s-budget'] - fracH) - reserve))

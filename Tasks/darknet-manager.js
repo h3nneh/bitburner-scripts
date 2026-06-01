@@ -4,6 +4,9 @@ export async function main(ns) {
         ["interval", 30000],
         ["no-tail-windows", false],
         ["verbose-terminal", false],
+        ["enable-stock", false], // Promote long-held stocks with idle darkweb RAM (see stockmaster coordination).
+        ["enable-share", false], // Spend idle darkweb RAM on share (faction rep boost).
+        ["enable-induce", false], // Induce migration on the busiest connected neighbor.
         ["help", false],
     ]);
 
@@ -47,6 +50,9 @@ async function ensureDarknetAutomation(ns, options) {
     const args = [];
     if (options["no-tail-windows"]) args.push("--no-tail-windows");
     if (options["verbose-terminal"]) args.push("--verbose-terminal");
+    if (options["enable-stock"]) args.push("--enable-stock");
+    if (options["enable-share"]) args.push("--enable-share");
+    if (options["enable-induce"]) args.push("--enable-induce");
     runOnce(ns, "darknet.js", args);
 }
 

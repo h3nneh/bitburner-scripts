@@ -45,6 +45,13 @@ let AUTOHASH = false
 let AUTOBUYHACKNET = false
 let AUTOHASHTIMER = Number.POSITIVE_INFINITY
 const RESERVERAM = 32
+// Stock manipulation: when enabled, reserve a fraction of total threads to grow servers whose
+// stock we hold long / hack servers we hold short (with {stock:true}). Positions are published by
+// stockmaster.js to STOCK_POSITIONS_FILE; we only read it (no ns.stock.* RAM cost here).
+let STOCKMANIP = false
+let STOCKMANIPFRAC = 0.1
+const STOCK_POSITIONS_FILE = "/Temp/stock-positions.txt"
+const STOCK_POSITIONS_MAX_AGE_MS = 30000
 
 //Configuration
 let lastpid = 0
@@ -59,6 +66,9 @@ export async function main(ns) {
   PURCHASE = !ns.args.includes("nopurchase")
   AUTOHASH = ns.args.includes("autohash") && hasBN(ns, 9)
   AUTOBUYHACKNET = ns.args.includes("autobuyhacknet")
+  STOCKMANIP = ns.args.includes("stockmanip")
+  const fracArg = ns.args.find(a => typeof a === "string" && a.startsWith("stockmanipfrac="))
+  if (fracArg) STOCKMANIPFRAC = Math.min(0.95, Math.max(0, Number(fracArg.split("=")[1]) || STOCKMANIPFRAC))
   if (AUTOBUYHACKNET) AUTOHASHTIMER = (1000 * 60 * 15) + performance.now()
   virus(ns)
   init(ns)
@@ -100,6 +110,11 @@ export async function main(ns) {
       }
     }
     THREADSMAX = THREADSLEFT
+
+    // Reserve a fraction of total threads for stock manipulation (dispatched before the money batch
+    // below). The money batch then plans around the reduced THREADSLEFT, leaving RAM for manipulation.
+    let stockManipThreads = STOCKMANIP ? Math.floor(THREADSMAX * STOCKMANIPFRAC) : 0
+    if (stockManipThreads > 0) THREADSLEFT = Math.max(0, THREADSLEFT - stockManipThreads)
 
     //Figure out how many threads to assign to the wave, and where they will go for best usage.
     //First weaken
@@ -188,6 +203,9 @@ export async function main(ns) {
     }
     BATCHESTOTAL = Math.floor(THREADSLEFT / (BATCHINFO.H1 + BATCHINFO.W1 + BATCHINFO.G1 + BATCHINFO.W2))
     if (ZERGSTATUS && ZERGREQUIRED !== ZERGSENT) BATCHESTOTAL = Math.max(BATCHESTOTAL - 2, 0) //Reserve a few batches to send as zerglings
+
+    // Dispatch stock manipulation first so it claims its reserved RAM before the money batch fills the rest.
+    if (stockManipThreads > 0) manipulateStocks(ns, stockManipThreads, !USEHACKNET)
 
     BETWEENEND = performance.now()
     STARTTIME = performance.now()
@@ -296,6 +314,43 @@ async function zerglings(ns, threads) {
     ZERGSENT += threadsthisround
     THREADSLEFT -= threadsthisround
     await serverRun(ns, NEXTTARGET.hostname, threadsthisround, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, !ns.args.includes("usehacknet"))
+  }
+}
+
+/** Read the latest published stock positions (written by stockmaster.js). Returns null if the file
+ * is missing, malformed, or stale, in which case manipulation is skipped this cycle.
+ * @param {NS} ns */
+function readStockPositions(ns) {
+  const raw = ns.read(STOCK_POSITIONS_FILE)
+  if (!raw) return null
+  let data
+  try { data = JSON.parse(raw) } catch { return null }
+  if (!data || !data.positions) return null
+  if (Date.now() - (data.lastUpdate || 0) > STOCK_POSITIONS_MAX_AGE_MS) return null
+  return data.positions
+}
+
+/** Spend the reserved manipulation threads growing servers whose stock we hold long (pushes price up)
+ * and hacking servers we hold short (pushes price down). No-op if no fresh positions are published.
+ * @param {NS} ns
+ * @param {number} totalThreads threads reserved for manipulation this cycle
+ * @param {boolean} nohacknet */
+function manipulateStocks(ns, totalThreads, nohacknet) {
+  const positions = readStockPositions(ns)
+  if (!positions) return
+  const held = Object.values(positions).filter(p =>
+    p && p.server && (p.position === "long" || p.position === "short") &&
+    (() => { try { return ns.hasRootAccess(p.server) } catch { return false } })())
+  if (held.length === 0) return
+  // Weight allocation by leverage: more shares + more extreme forecast = more impact worth pushing.
+  const weight = p => Math.max(1, (p.shares || 0) * Math.abs((p.forecast ?? 0.5) - 0.5))
+  const totalWeight = held.reduce((sum, p) => sum + weight(p), 0)
+  servers = getServersSorted(ns, nohacknet)
+  for (const p of held) {
+    const threads = Math.floor(totalThreads * weight(p) / totalWeight)
+    if (threads <= 0) continue
+    const worker = p.position === "long" ? WORKER_G : WORKER_H
+    runIt_Local(ns, worker, [p.server, 0, threads, false, nohacknet, true])
   }
 }
 
@@ -768,6 +823,9 @@ function runIt_Local(ns, script, argmts) {//target, sleeptm, threads, chunks, op
   let threads = argmts[2]
   const chunks = argmts[3]
   const nohacknet = argmts[4]
+  // 6th arg (optional): manipulate the target's stock price. Passed as the worker's 3rd arg;
+  // the workers treat `true` as {stock:true}. Existing callers pass nothing -> "QUIET" -> no stock effect.
+  const stock = argmts[5] === true ? true : "QUIET"
   let thispid = 0
   const serversRemove = []
   for (const server of servers) {
@@ -783,7 +841,7 @@ function runIt_Local(ns, script, argmts) {//target, sleeptm, threads, chunks, op
     //ns.scp([WORKER_H, WORKER_G, WORKER_W], server, "home")
     if (chunks) { //We NEED enough to finish the whole operation at once
       if (threadsonserver >= threads) {
-        thispid = ns.exec(script, server, { threads: threads, temporary: true }, target, sleeptm, "QUIET")
+        thispid = ns.exec(script, server, { threads: threads, temporary: true }, target, sleeptm, stock)
         if (thispid === 0) ns.tprintf("Failed to run: %s on %s threads:%s target:%s", script, server, threads, target)
         threads = 0
         break
@@ -791,13 +849,13 @@ function runIt_Local(ns, script, argmts) {//target, sleeptm, threads, chunks, op
     } // chunks
     else {
       if (threadsonserver >= threads) { //We have enough to finish it off
-        thispid = ns.exec(script, server, { threads: threads, temporary: true }, target, sleeptm, "QUIET")
+        thispid = ns.exec(script, server, { threads: threads, temporary: true }, target, sleeptm, stock)
         if (thispid === 0) ns.tprintf("Failed to run: %s on %s threads:%s target:%s", script, server, threads, target)
         threads = 0
         break
       }
       else { //We have threads but not enough     
-        thispid = ns.exec(script, server, { threads: threadsonserver, temporary: true }, target, sleeptm, "QUIET")
+        thispid = ns.exec(script, server, { threads: threadsonserver, temporary: true }, target, sleeptm, stock)
         if (thispid === 0) ns.tprintf("Failed to run: %s on %s threads:%s target:%s", script, server, threads, target)
         threads -= threadsonserver
         threadsonserver = 0
@@ -1282,11 +1340,12 @@ function init(ns) {
 
 /** @param {NS} ns */
 async function writeFiles(ns) {
-  // Write the worker scripts to home so they can be scp'd out. args: [target, additionalMsec]
+  // Write the worker scripts to home so they can be scp'd out. args: [target, additionalMsec, stock]
+  // The 3rd arg is `true` only for stock-manipulation dispatches; normal batching passes "QUIET" (falsy here).
   const hfile = `/** @param {NS} ns */
-export async function main(ns) { await ns.hack(ns.args[0], { additionalMsec: ns.args[1] }) }`
+export async function main(ns) { await ns.hack(ns.args[0], { additionalMsec: ns.args[1], stock: ns.args[2] === true }) }`
   const gfile = `/** @param {NS} ns */
-export async function main(ns) { await ns.grow(ns.args[0], { additionalMsec: ns.args[1] }) }`
+export async function main(ns) { await ns.grow(ns.args[0], { additionalMsec: ns.args[1], stock: ns.args[2] === true }) }`
   const wfile = `/** @param {NS} ns */
 export async function main(ns) { await ns.weaken(ns.args[0], { additionalMsec: ns.args[1] }) }`
   ns.write(WORKER_H, hfile, "w")

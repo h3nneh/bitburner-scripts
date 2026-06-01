@@ -3,6 +3,9 @@ const AUTH_FAILURE = 401;
 const SERVICE_UNAVAILABLE = 503;
 const STATE_FILE = "/Temp/darknet-passwords.txt";
 const STASIS_FILE = "stasis.js";
+// Written by stockmaster.js; read here to know which symbols we hold long (for promoteStock).
+const STOCK_POSITIONS_FILE = "/Temp/stock-positions.txt";
+const STOCK_POSITIONS_MAX_AGE_MS = 30000;
 
 const COMMON_PASSWORDS = [
     "123456", "password", "12345678", "qwerty", "123456789", "12345", "1234", "111111", "1234567",
@@ -36,7 +39,7 @@ const LARGE_PRIMES = [
 export async function main(ns) {
     const options = parseOptions(ns.args);
     if (options.help) {
-        ns.tprint(`Usage: run ${ns.getScriptName()} [--origin home] [--interval 15000] [--disable-phishing] [--verbose-terminal] [--self-test]`);
+        ns.tprint(`Usage: run ${ns.getScriptName()} [--origin home] [--interval 15000] [--disable-phishing] [--enable-stock] [--enable-share] [--enable-induce] [--verbose-terminal] [--self-test]`);
         return;
     }
     if (options["self-test"]) {
@@ -58,6 +61,10 @@ export async function main(ns) {
             await freeLocalBlockedRam(ns);
             if (!options["disable-phishing"]) await tryPhishing(ns);
             await crawlNeighbors(ns, script, String(options.origin), interval, maxAttempts, options["verbose-terminal"]);
+            // Idle-RAM darkweb actions (ported from SphyxOS darknet controller), all off by default.
+            if (options["enable-stock"]) await tryPromoteStocks(ns);
+            if (options["enable-share"]) await tryDarknetShare(ns);
+            if (options["enable-induce"]) await tryInduceMigration(ns, String(options.origin));
         } catch (error) {
             ns.print(`WARN: Darknet worker cycle failed on ${ns.getHostname()}: ${formatError(error)}`);
         }
@@ -71,6 +78,9 @@ function parseOptions(args) {
         interval: 15000,
         "max-attempts-per-host": 160,
         "disable-phishing": false,
+        "enable-stock": false,
+        "enable-share": false,
+        "enable-induce": false,
         "verbose-terminal": false,
         "self-test": false,
         help: false,
@@ -409,6 +419,69 @@ async function freeLocalBlockedRam(ns) {
         const result = await ns.dnet.memoryReallocation();
         if (!result.success) return;
     }
+}
+
+// Returns the darkweb session's blocked RAM (0 = idle), or a non-zero sentinel if the API is unavailable.
+function darknetBlockedRam(ns, target) {
+    try { return target == null ? ns.dnet.getBlockedRam() : ns.dnet.getBlockedRam(target); }
+    catch { return 1; }
+}
+
+// Symbols we currently hold a long position in, per stockmaster's published snapshot (fresh only).
+function readHeldLongSymbols(ns) {
+    let raw;
+    try { raw = ns.read(STOCK_POSITIONS_FILE); } catch { return []; }
+    if (!raw) return [];
+    let data;
+    try { data = JSON.parse(raw); } catch { return []; }
+    if (!data || !data.positions) return [];
+    if (Date.now() - (data.lastUpdate || 0) > STOCK_POSITIONS_MAX_AGE_MS) return [];
+    return Object.entries(data.positions).filter(([, p]) => p && p.position === "long").map(([sym]) => sym);
+}
+
+// Promote (nudge the forecast up on) each long-held symbol while the darkweb session is idle.
+async function tryPromoteStocks(ns) {
+    if (typeof ns.dnet.promoteStock !== "function") return;
+    if (darknetBlockedRam(ns) !== 0) return;
+    for (const sym of readHeldLongSymbols(ns)) {
+        if (darknetBlockedRam(ns) !== 0) break;
+        try { await ns.dnet.promoteStock(sym); }
+        catch (error) { ns.print(`WARN: promoteStock(${sym}) failed: ${formatError(error)}`); }
+    }
+}
+
+// Spend idle darkweb RAM on share (boosts faction rep gain).
+async function tryDarknetShare(ns) {
+    if (typeof ns.dnet.share !== "function") return;
+    if (darknetBlockedRam(ns) !== 0) return;
+    try { await ns.dnet.share(); }
+    catch (error) { ns.print(`WARN: darknet share failed: ${formatError(error)}`); }
+}
+
+// Induce migration on the connected neighbor with the most blocked RAM (frees it up for cracking).
+async function tryInduceMigration(ns, origin) {
+    if (typeof ns.dnet.induceServerMigration !== "function") return;
+    if (darknetBlockedRam(ns) !== 0) return;
+    const host = ns.getHostname();
+    const knownPasswords = readKnownPasswords(ns);
+    let neighbors;
+    try { neighbors = ns.dnet.probe(false); } catch { return; }
+    let best = null, bestRam = 0;
+    for (const target of neighbors) {
+        if (target === "darkweb" || target === host || target === origin) continue;
+        if (knownPasswords[target] == null) continue;
+        let details;
+        try { details = getDarknetServerDetails(ns, target); } catch { continue; }
+        if (details.modelId === "(The Labyrinth)") continue;
+        const blocked = darknetBlockedRam(ns, target);
+        if (blocked > bestRam) { bestRam = blocked; best = target; }
+    }
+    if (!best) return;
+    try {
+        const session = ns.dnet.connectToSession(best, knownPasswords[best]);
+        if (!session.success) return;
+        await ns.dnet.induceServerMigration(best);
+    } catch (error) { ns.print(`WARN: induceServerMigration(${best}) failed: ${formatError(error)}`); }
 }
 
 async function tryPhishing(ns) {

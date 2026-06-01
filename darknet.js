@@ -6,6 +6,9 @@ export async function main(ns) {
         ["interval", 30000],
         ["no-tail-windows", false],
         ["verbose-terminal", false],
+        ["enable-stock", false], // Forward to the worker: promote long-held stocks with idle darkweb RAM.
+        ["enable-share", false], // Forward to the worker: share with idle darkweb RAM.
+        ["enable-induce", false], // Forward to the worker: induce migration on the busiest neighbor.
         ["help", false],
     ]);
 
@@ -51,6 +54,9 @@ export async function main(ns) {
             if (ns.fileExists(stasis, "home")) await ns.scp(stasis, darkweb, "home");
             const workerArgs = ["--origin", "home"];
             if (options["verbose-terminal"]) workerArgs.push("--verbose-terminal");
+            if (options["enable-stock"]) workerArgs.push("--enable-stock");
+            if (options["enable-share"]) workerArgs.push("--enable-share");
+            if (options["enable-induce"]) workerArgs.push("--enable-induce");
             const pid = ns.exec(worker, darkweb, { threads: 1, preventDuplicates: true }, ...workerArgs);
             if (pid > 0) terminalLog(ns, options, `INFO: Started ${worker} on ${darkweb} (pid ${pid}).`);
             else ns.print(`INFO: ${worker} is already running on ${darkweb}, or there is not enough RAM.`);

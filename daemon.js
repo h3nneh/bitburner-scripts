@@ -297,6 +297,9 @@ export async function main(ns) {
         // puppet.js owns hacking only; let daemon's host-manager handle server purchases. Run quiet unless tail windows are enabled.
         const args = []; //['nopurchase'];
         if (!openTailWindows) args.push('quiet');
+        // In BN8, hacking earns no money; dedicate a large thread fraction to stock-price manipulation
+        // (grow longs / hack shorts) coordinated via stockmaster's published positions.
+        if (bitNodeN == 8) args.push('stockmanip', 'stockmanipfrac=0.5');
         return args;
     }
 
@@ -703,7 +706,11 @@ export async function main(ns) {
                 },
                 {
                     name: "Tasks/darknet-manager.js",
-                    args: () => !openTailWindows ? ['--no-tail-windows'] : [],
+                    args: () => {
+                        const a = !openTailWindows ? ['--no-tail-windows'] : [];
+                        if (bitNodeN == 8) a.push('--enable-stock'); // Promote long-held stocks via idle darkweb RAM in BN8.
+                        return a;
+                    },
                     shouldRun: () => !isMoneyFocusSpendingLocked() && options['casino-complete'] && !options['disable-darknet'] && reqRam(darknetMinHomeRam),
                     cooldownMs: 60 * 1000,
                     ignoreReservedRam: false,
