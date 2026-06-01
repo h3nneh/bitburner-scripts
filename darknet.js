@@ -50,7 +50,8 @@ export async function main(ns) {
                 continue;
             }
 
-            await ns.scp(worker, darkweb, "home");
+            // The worker imports darknet-proxy.js, so copy it alongside (proxy workers are self-written).
+            await ns.scp([worker, "darknet-proxy.js"], darkweb, "home");
             if (ns.fileExists(stasis, "home")) await ns.scp(stasis, darkweb, "home");
             const workerArgs = ["--origin", "home"];
             if (options["verbose-terminal"]) workerArgs.push("--verbose-terminal");
