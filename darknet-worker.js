@@ -204,6 +204,7 @@ async function spreadToNeighbor(ns, script, target, password, interval, verboseT
         if (ns.fileExists(STATE_FILE, ns.getHostname())) await ns.scp(STATE_FILE, target, ns.getHostname());
         const args = ["--origin", ns.getHostname(), "--interval", interval];
         if (verboseTerminal) args.push("--verbose-terminal");
+        if (ns.ps(target).some(p => p.filename === script)) return;
         const pid = ns.exec(script, target, { threads: 1, preventDuplicates: true }, ...args);
         if (pid > 0) ns.print(`INFO: Spread ${script} to ${target} (pid ${pid}).`);
     } catch (error) {
