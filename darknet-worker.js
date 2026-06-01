@@ -1,5 +1,3 @@
-import { proxyLocal, proxyAuth, ensureProxyWorkers, PROXY_WORKER_FILES } from "./darknet-proxy.js";
-
 const SUCCESS = 200;
 const AUTH_FAILURE = 401;
 const SERVICE_UNAVAILABLE = 503;
@@ -53,7 +51,6 @@ export async function main(ns) {
     }
 
     ns.disableLog("sleep");
-    ensureProxyWorkers(ns); // Write the RAM-dodge proxy workers to this server before any dnet call.
     const script = ns.getScriptName();
     const interval = Math.max(1000, Number(options.interval) || 15000);
     const maxAttempts = Math.max(1, Number(options["max-attempts-per-host"]) || 160);
@@ -109,13 +106,12 @@ function parseOptions(args) {
 async function crawlNeighbors(ns, script, origin, interval, maxAttempts, verboseTerminal) {
     const host = ns.getHostname();
     const knownPasswords = readKnownPasswords(ns);
-    const probed = await proxyLocal(ns, "dnet.probe", false);
-    const neighbors = (Array.isArray(probed) ? probed : []).filter(server => server !== origin && server !== host);
+    const neighbors = ns.dnet.probe(false).filter(server => server !== origin && server !== host);
 
     for (const target of neighbors) {
         let details;
         try {
-            details = await getDarknetServerDetails(ns, target);
+            details = getDarknetServerDetails(ns, target);
         } catch (error) {
             ns.print(`WARN: Cannot inspect ${target}: ${formatError(error)}`);
             continue;
@@ -126,8 +122,8 @@ async function crawlNeighbors(ns, script, origin, interval, maxAttempts, verbose
 
         let password = knownPasswords[target];
         if (password != null) {
-            const session = await proxyLocal(ns, "dnet.connectToSession", target, password);
-            if (!session?.success) password = null;
+            const session = ns.dnet.connectToSession(target, password);
+            if (!session.success) password = null;
         }
 
         if (password == null) {
@@ -141,12 +137,12 @@ async function crawlNeighbors(ns, script, origin, interval, maxAttempts, verbose
     }
 }
 
-async function getDarknetServerDetails(ns, target) {
-    // Try each details-API variant via the proxy; the worker returns null for a missing/failed call.
-    let details = await proxyLocal(ns, "dnet.getServerDetails", target);
-    if (details == null) details = await proxyLocal(ns, "dnet.getServer", target);
-    if (details == null) details = await proxyLocal(ns, "dnet.getServerAuthDetails", target);
-    if (details == null) throw new Error("No compatible dnet server details API is available, or the server is unreachable.");
+function getDarknetServerDetails(ns, target) {
+    let details;
+    if (typeof ns.dnet.getServerDetails === "function") details = ns.dnet.getServerDetails(target);
+    else if (typeof ns.dnet.getServer === "function") details = ns.dnet.getServer(target);
+    else if (typeof ns.dnet.getServerAuthDetails === "function") details = ns.dnet.getServerAuthDetails(target);
+    else throw new Error("No compatible dnet server details API is available.");
     return normalizeDarknetServerDetails(details);
 }
 
@@ -179,13 +175,13 @@ async function solveAndAuthenticate(ns, target, details, maxAttempts, verboseTer
     }
 
     for (const candidate of unique(candidates)) {
-        const result = await proxyLocal(ns, "dnet.authenticate", target, candidate, 0);
-        if (result?.code === SUCCESS) {
+        const result = await ns.dnet.authenticate(target, candidate, 0);
+        if (result.code === SUCCESS) {
             terminalLog(ns, verboseTerminal, `SUCCESS: Darknet authenticated ${target} (${details.modelId}).`);
             return candidate;
         }
-        if (result?.code === SERVICE_UNAVAILABLE) return null;
-        if (result?.code !== AUTH_FAILURE) ns.print(`INFO: Auth ${target} failed: ${result?.message} (${result?.code})`);
+        if (result.code === SERVICE_UNAVAILABLE) return null;
+        if (result.code !== AUTH_FAILURE) ns.print(`INFO: Auth ${target} failed: ${result.message} (${result.code})`);
     }
     ns.print(`INFO: Solver failed for ${target} model=${details.modelId} after ${candidates.length} attempts.`);
     return null;
@@ -193,10 +189,9 @@ async function solveAndAuthenticate(ns, target, details, maxAttempts, verboseTer
 
 async function spreadToNeighbor(ns, script, target, password, interval, verboseTerminal) {
     try {
-        const session = await proxyLocal(ns, "dnet.connectToSession", target, password);
-        if (!session?.success) return;
-        // Spread the worker, its proxy module + workers, and state so the neighbour can run standalone.
-        await ns.scp([script, "darknet-proxy.js", ...PROXY_WORKER_FILES], target, ns.getHostname());
+        const session = ns.dnet.connectToSession(target, password);
+        if (!session.success) return;
+        await ns.scp(script, target, ns.getHostname());
         if (ns.fileExists(STASIS_FILE, ns.getHostname())) await ns.scp(STASIS_FILE, target, ns.getHostname());
         if (ns.fileExists(STATE_FILE, ns.getHostname())) await ns.scp(STATE_FILE, target, ns.getHostname());
         const args = ["--origin", ns.getHostname(), "--interval", interval];
@@ -388,8 +383,8 @@ function parseExpression(input) {
 
 async function tryStasis(ns) {
     const host = ns.getHostname();
-    const freeRam = (await proxyLocal(ns, "getServerMaxRam", host)) - (await proxyLocal(ns, "getServerUsedRam", host));
-    if (freeRam < (await proxyLocal(ns, "getScriptRam", STASIS_FILE, host))) {
+    const freeRam = ns.getServerMaxRam(host) - ns.getServerUsedRam(host);
+    if (freeRam < ns.getScriptRam(STASIS_FILE, host)) {
         ns.print("WARN: Not enough RAM for stasis.");
         return;
     }
@@ -402,26 +397,34 @@ async function tryStasis(ns) {
 
 async function openLocalCaches(ns) {
     const host = ns.getHostname();
-    const caches = await proxyLocal(ns, "ls", host, ".cache");
-    for (const file of Array.isArray(caches) ? caches : []) {
-        const result = await proxyLocal(ns, "dnet.openCache", file, true);
-        if (result?.success) ns.print(`SUCCESS: Opened darknet cache ${file} on ${host}: ${result.message}`);
+    for (const file of ns.ls(host, ".cache")) {
+        try {
+            const result = ns.dnet.openCache(file, true);
+            if (result.success) ns.print(`SUCCESS: Opened darknet cache ${file} on ${host}: ${result.message}`);
+        } catch (error) {
+            ns.print(`WARN: Could not open cache ${file}: ${formatError(error)}`);
+        }
     }
 }
 
 async function freeLocalBlockedRam(ns) {
     for (let i = 0; i < 3; i++) {
-        const blocked = await proxyLocal(ns, "dnet.getBlockedRam");
-        if (typeof blocked !== "number" || blocked <= 0) return;
-        const result = await proxyLocal(ns, "dnet.memoryReallocation");
-        if (!result?.success) return;
+        let blocked = 0;
+        try {
+            blocked = ns.dnet.getBlockedRam();
+        } catch {
+            return;
+        }
+        if (blocked <= 0) return;
+        const result = await ns.dnet.memoryReallocation();
+        if (!result.success) return;
     }
 }
 
 // Returns the darkweb session's blocked RAM (0 = idle), or a non-zero sentinel if the API is unavailable.
-async function darknetBlockedRam(ns, target) {
-    const r = target == null ? await proxyLocal(ns, "dnet.getBlockedRam") : await proxyLocal(ns, "dnet.getBlockedRam", target);
-    return typeof r === "number" ? r : 1;
+function darknetBlockedRam(ns, target) {
+    try { return target == null ? ns.dnet.getBlockedRam() : ns.dnet.getBlockedRam(target); }
+    catch { return 1; }
 }
 
 // Symbols we currently hold a long position in, per stockmaster's published snapshot (fresh only).
@@ -438,47 +441,59 @@ function readHeldLongSymbols(ns) {
 
 // Promote (nudge the forecast up on) each long-held symbol while the darkweb session is idle.
 async function tryPromoteStocks(ns) {
-    if (await darknetBlockedRam(ns) !== 0) return;
+    if (typeof ns.dnet.promoteStock !== "function") return;
+    if (darknetBlockedRam(ns) !== 0) return;
     for (const sym of readHeldLongSymbols(ns)) {
-        if (await darknetBlockedRam(ns) !== 0) break;
-        await proxyLocal(ns, "dnet.promoteStock", sym); // No-op if the API is unavailable.
+        if (darknetBlockedRam(ns) !== 0) break;
+        try { await ns.dnet.promoteStock(sym); }
+        catch (error) { ns.print(`WARN: promoteStock(${sym}) failed: ${formatError(error)}`); }
     }
 }
 
 // Spend idle darkweb RAM on share (boosts faction rep gain).
 async function tryDarknetShare(ns) {
-    if (await darknetBlockedRam(ns) !== 0) return;
-    await proxyLocal(ns, "dnet.share");
+    if (typeof ns.dnet.share !== "function") return;
+    if (darknetBlockedRam(ns) !== 0) return;
+    try { await ns.dnet.share(); }
+    catch (error) { ns.print(`WARN: darknet share failed: ${formatError(error)}`); }
 }
 
 // Induce migration on the connected neighbor with the most blocked RAM (frees it up for cracking).
 async function tryInduceMigration(ns, origin) {
-    if (await darknetBlockedRam(ns) !== 0) return;
+    if (typeof ns.dnet.induceServerMigration !== "function") return;
+    if (darknetBlockedRam(ns) !== 0) return;
     const host = ns.getHostname();
     const knownPasswords = readKnownPasswords(ns);
-    const probed = await proxyLocal(ns, "dnet.probe", false);
-    const neighbors = Array.isArray(probed) ? probed : [];
+    let neighbors;
+    try { neighbors = ns.dnet.probe(false); } catch { return; }
     let best = null, bestRam = 0;
     for (const target of neighbors) {
         if (target === "darkweb" || target === host || target === origin) continue;
         if (knownPasswords[target] == null) continue;
         let details;
-        try { details = await getDarknetServerDetails(ns, target); } catch { continue; }
+        try { details = getDarknetServerDetails(ns, target); } catch { continue; }
         if (details.modelId === "(The Labyrinth)") continue;
-        const blocked = await darknetBlockedRam(ns, target);
+        const blocked = darknetBlockedRam(ns, target);
         if (blocked > bestRam) { bestRam = blocked; best = target; }
     }
     if (!best) return;
-    // Re-connect the session to the target and induce migration in one proxied auth call.
-    await proxyAuth(ns, best, knownPasswords[best], "dnet.induceServerMigration", best);
+    try {
+        const session = ns.dnet.connectToSession(best, knownPasswords[best]);
+        if (!session.success) return;
+        await ns.dnet.induceServerMigration(best);
+    } catch (error) { ns.print(`WARN: induceServerMigration(${best}) failed: ${formatError(error)}`); }
 }
 
 async function tryPhishing(ns) {
     const host = ns.getHostname();
-    const freeRam = (await proxyLocal(ns, "getServerMaxRam", host)) - (await proxyLocal(ns, "getServerUsedRam", host));
+    const freeRam = ns.getServerMaxRam(host) - ns.getServerUsedRam(host);
     if (freeRam < 2.5) return;
-    const result = await proxyLocal(ns, "dnet.phishingAttack");
-    if (result?.success) ns.print(`SUCCESS: ${result.message}`);
+    try {
+        const result = await ns.dnet.phishingAttack();
+        if (result.success) ns.print(`SUCCESS: ${result.message}`);
+    } catch (error) {
+        ns.print(`WARN: Phishing failed: ${formatError(error)}`);
+    }
 }
 
 function readKnownPasswords(ns) {
