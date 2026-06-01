@@ -39,13 +39,18 @@ and inspectability.
 
 ### Coordination file: `/Temp/stock-positions.txt`
 
-Written by `stockmaster.js` each trading tick. JSON dict keyed by symbol:
+Written by `stockmaster.js` each trading tick. Top-level object with a
+`lastUpdate` timestamp (ms, for staleness checks) and a `positions` dict keyed
+by symbol:
 
 ```json
 {
-  "ECP":  { "server": "ecorp",      "position": "long",  "shares": 12000, "forecast": 0.62 },
-  "SLRS": { "server": "solaris",    "position": "short", "shares": 4000,  "forecast": 0.39 },
-  "FNS":  { "server": "foodnstuff", "position": "none",  "shares": 0,     "forecast": 0.51 }
+  "lastUpdate": 1730000000000,
+  "positions": {
+    "ECP":  { "server": "ecorp",      "position": "long",  "shares": 12000, "forecast": 0.62 },
+    "SLRS": { "server": "solaris",    "position": "short", "shares": 4000,  "forecast": 0.39 },
+    "FNS":  { "server": "foodnstuff", "position": "none",  "shares": 0,     "forecast": 0.51 }
+  }
 }
 ```
 
@@ -53,8 +58,7 @@ Written by `stockmaster.js` each trading tick. JSON dict keyed by symbol:
 - `position`: `"long"` if `sharesLong > 0`, `"short"` if `sharesShort > 0`, else `"none"`.
 - `shares`: net shares held in the active position direction.
 - `forecast`: current probability (for tie-break / leverage sorting).
-- File also carries a top-level `lastUpdate` timestamp (ms) for staleness checks,
-  e.g. stored as `{ "lastUpdate": 1730000000000, "positions": { ... } }`.
+- `lastUpdate`: write time in ms; consumers skip manipulation if older than 30s.
 
 ## Components
 
