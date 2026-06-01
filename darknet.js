@@ -1,3 +1,5 @@
+import { proxyLocal, ensureProxyWorkers } from "./darknet-proxy.js";
+
 /** @param {NS} ns */
 export async function main(ns) {
     const options = ns.flags([
@@ -26,6 +28,7 @@ export async function main(ns) {
         terminalLog(ns, options, "INFO: ns.dnet is unavailable. Buy TOR + DarkscapeNavigator.exe before running darknet automation.");
         return;
     }
+    ensureProxyWorkers(ns); // Write the RAM-dodge proxy workers on home before any proxied dnet call.
     if (!ns.fileExists("DarkscapeNavigator.exe", "home")) {
         terminalLog(ns, options, "INFO: Darknet is not unlocked yet. Buy TOR + DarkscapeNavigator.exe before running darknet automation.");
         return;
@@ -38,19 +41,20 @@ export async function main(ns) {
 
     while (true) {
         try {
-            if (!ns.dnet.isDarknetServer(darkweb)) {
+            if (!(await proxyLocal(ns, "dnet.isDarknetServer", darkweb))) {
                 terminalLog(ns, options, "INFO: Darknet is not unlocked yet. Buy DarkscapeNavigator.exe and rerun.");
                 return;
             }
 
-            const auth = await ns.dnet.authenticate(darkweb, "", 0);
-            if (!auth.success) {
-                ns.print(`WARN: Could not authenticate to darkweb: ${auth.message} (${auth.code})`);
+            const auth = await proxyLocal(ns, "dnet.authenticate", darkweb, "", 0);
+            if (!auth?.success) {
+                ns.print(`WARN: Could not authenticate to darkweb: ${auth?.message} (${auth?.code})`);
                 await ns.sleep(interval);
                 continue;
             }
 
-            await ns.scp(worker, darkweb, "home");
+            // The worker imports darknet-proxy.js, so copy it (and the proxy workers) to the darkweb server.
+            await ns.scp([worker, "darknet-proxy.js", "dnet-proxy.js", "dnet-proxy-auth.js"], darkweb, "home");
             if (ns.fileExists(stasis, "home")) await ns.scp(stasis, darkweb, "home");
             const workerArgs = ["--origin", "home"];
             if (options["verbose-terminal"]) workerArgs.push("--verbose-terminal");
