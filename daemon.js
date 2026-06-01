@@ -142,7 +142,7 @@ export async function main(ns) {
     const backupServerName = 'harakiri-sushi'; // Somewhat arbitrarily chosen. It's one of several servers with 16GB which requires no open ports to crack.
     const corporationMinHomeRam = 4096;
     const corporationSelfFundingCost = 150e9;
-    const darknetMinHomeRam = 8192;
+    const darknetMinHomeRam = 2048;
     const helperBurstRam = {
         stats: 3.6,
         go: 20.2,
