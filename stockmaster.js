@@ -177,8 +177,15 @@ export async function main(ns) {
             // Check whether we have 4s access yes (once we do, we can stop checking)
             if (pre4s) pre4s = !(await checkAccess(ns, "has4SDataTixApi"));
             const holdings = await refresh(ns, !pre4s, allStocks, myStocks); // Returns total stock value
-            // Publish current positions for stock-manipulation consumers (puppet.js / darknet-worker.js).
-            if (stockServerMap) try { await writeStockPositions(ns, allStocks, stockServerMap); } catch { /* non-fatal */ }
+            // Publish current positions for stock-manipulation consumers (puppet.js / darknet-worker.js),
+            // but ONLY once we have 4S data. Pre-4S, stockmaster infers forecasts from price history and
+            // detects "inversions" on sudden price swings; manipulation would create artificial swings,
+            // trip false inversions, and make us sell + refuse to rebuy. With 4S, forecasts are exact and
+            // manipulation only ever moves them in our position's favor, so it is safe.
+            if (stockServerMap) try {
+                if (pre4s) await clearStockPositions(ns); // No manipulation until 4S
+                else await writeStockPositions(ns, allStocks, stockServerMap);
+            } catch { /* non-fatal */ }
             const corpus = holdings + playerStats.money; // Corpus means total stocks + cash
             const maxHoldings = (1 - fracH) * corpus; // The largest value of stock we could hold without violiating fracH (Fraction to keep as cash)
             if (pre4s && !mock && await tryGet4SApi(ns, playerStats, corpus * (options['buy-4s-budget'] - fracH) - reserve))
