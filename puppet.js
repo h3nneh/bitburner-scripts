@@ -338,9 +338,15 @@ function readStockPositions(ns) {
 function manipulateStocks(ns, totalThreads, nohacknet) {
   const positions = readStockPositions(ns)
   if (!positions) return
-  const held = Object.values(positions).filter(p =>
-    p && p.server && (p.position === "long" || p.position === "short") &&
-    (() => { try { return ns.hasRootAccess(p.server) } catch { return false } })())
+  const playerHack = ns.getPlayer().skills.hacking
+  const held = Object.values(positions).filter(p => {
+    if (!p || !p.server || (p.position !== "long" && p.position !== "short")) return false
+    let server
+    try { if (!ns.hasRootAccess(p.server)) return false; server = ns.getServer(p.server) } catch { return false }
+    // hack() (short manipulation) needs our hacking level to meet the server's requirement; grow() does not.
+    if (p.position === "short" && server.requiredHackingSkill > playerHack) return false
+    return true
+  })
   if (held.length === 0) return
   // Weight allocation by leverage: more shares + more extreme forecast = more impact worth pushing.
   const weight = p => Math.max(1, (p.shares || 0) * Math.abs((p.forecast ?? 0.5) - 0.5))
