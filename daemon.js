@@ -53,6 +53,7 @@ const argsSchema = [
     ['force-stock-liquidate', false], // Autopilot requested a one-shot stock liquidation via stockmaster.js.
     ['stock-cash-frac', 0.1], // stockmaster --fracH in autopilot mode.
     ['stock-buy-frac', 0.4], // stockmaster --fracB in autopilot mode.
+    ['bn8-stockmanipfrac', 0.5], // BN8: fraction of puppet threads reserved for stock-price manipulation (grow longs / hack shorts). Higher pushes held positions harder but saturates once forecasts are pinned; the remainder earns hack XP and preps servers.
     ['bn10-sleeve-reserve', 0], // Reserve target for BN10 Covenant sleeves/memory.
     ['critical-home-ram-reserve', 0], // Extra home RAM to preserve for high-level orchestration helpers.
     ['time-before-boosting-best-hack-server', 900000], // Delay before spending hashes on the best hack-income server.
@@ -299,7 +300,7 @@ export async function main(ns) {
         if (!openTailWindows) args.push('quiet');
         // In BN8, hacking earns no money; dedicate a large thread fraction to stock-price manipulation
         // (grow longs / hack shorts) coordinated via stockmaster's published positions.
-        if (bitNodeN == 8) args.push('stockmanip', 'stockmanipfrac=0.5');
+        if (bitNodeN == 8) args.push('stockmanip', `stockmanipfrac=${options['bn8-stockmanipfrac']}`);
         return args;
     }
 

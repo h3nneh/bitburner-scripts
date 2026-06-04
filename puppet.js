@@ -330,6 +330,21 @@ function readStockPositions(ns) {
   return data.positions
 }
 
+/** Servers whose stock we currently hold LONG. The normal money batch must NOT hack these: hacking
+ * drains money which pushes the stock price DOWN, fighting the manipulation threads that are growing
+ * the same server to push it UP. (Servers we hold short are fine to hack -- that aligns with the short.)
+ * @param {NS} ns
+ * @returns {Set<string>} hostnames to exclude from normal hack targeting */
+function getLongHeldServers(ns) {
+  const result = new Set()
+  if (!STOCKMANIP) return result
+  const positions = readStockPositions(ns)
+  if (!positions) return result
+  for (const p of Object.values(positions))
+    if (p && p.server && p.position === "long") result.add(p.server)
+  return result
+}
+
 /** Spend the reserved manipulation threads growing servers whose stock we hold long (pushes price up)
  * and hacking servers we hold short (pushes price down). No-op if no fresh positions are published.
  * @param {NS} ns
@@ -747,10 +762,11 @@ function getOptimalTarget(ns) {
   /** @type {Server[]} servers */
   const servers = getServers(ns)
   const player = ns.getPlayer()
+  const longServers = getLongHeldServers(ns) // don't pick a server we're pumping long; hacking it fights the manip
   let bestratio = 0
   let bestserver;
   for (const server of servers) {
-    if (server.minDifficulty === 100 || server.requiredHackingSkill > player.skills.hacking || !server.hasAdminRights || server.hostname === "home" || server.moneyMax === 0 || server.purchasedByPlayer) continue
+    if (server.minDifficulty === 100 || server.requiredHackingSkill > player.skills.hacking || !server.hasAdminRights || server.hostname === "home" || server.moneyMax === 0 || server.purchasedByPlayer || longServers.has(server.hostname)) continue
     const hchance = getHackChance(ns, server.hostname, server.minDifficulty)
     if (hchance === 0) continue
     const batchinfo = getHackP(ns, server, -1, -1, 1)
