@@ -64,6 +64,7 @@ const argsSchema = [
     ['pre-4s-inversion-detection-window', 10], // This much history will be used to detect recent negative trends and act on them immediately. (Default 10)
     ['pre-4s-min-blackout-window', 10], // Do not make any new purchases this many ticks before the detected stock market cycle tick, to avoid buying a position that reverses soon after
     ['pre-4s-minimum-hold-time', 10], // A recently bought position must be held for this long before selling, to avoid rash decisions due to noise after a fresh market cycle. (Default 10)
+    ['pre4s-manip', false], // Pre-4S, publish positions so puppet/darknet manipulate held stocks (grow longs / hack shorts), and suppress the twitchy inversion-driven sell-off for positions we are actively pumping. Use only when stock manipulation is enabled (e.g. BN8). Default off.
     ['buy-4s-budget', 0.8], // Maximum corpus value we will sacrifice in order to buy 4S. Setting to 0 will never buy 4s.
 ];
 
@@ -114,6 +115,7 @@ export async function main(ns) {
     const pre4sBuyThresholdProbability = options['pre-4s-buy-threshold-probability'];
     const pre4sMinBlackoutWindow = options['pre-4s-min-blackout-window'] || 1;
     const pre4sMinHoldTime = options['pre-4s-minimum-hold-time'] || 0;
+    const pre4sManip = options['pre4s-manip'];
     minTickHistory = options['pre-4s-min-tick-history'] || 21;
     nearTermForecastWindowLength = options['pre-4s-inversion-detection-window'] || 10;
     longTermForecastWindowLength = options['pre-4s-forecast-window'] || (marketCycleLength + 1);
@@ -177,13 +179,15 @@ export async function main(ns) {
             // Check whether we have 4s access yes (once we do, we can stop checking)
             if (pre4s) pre4s = !(await checkAccess(ns, "has4SDataTixApi"));
             const holdings = await refresh(ns, !pre4s, allStocks, myStocks); // Returns total stock value
-            // Publish current positions for stock-manipulation consumers (puppet.js / darknet-worker.js),
-            // but ONLY once we have 4S data. Pre-4S, stockmaster infers forecasts from price history and
-            // detects "inversions" on sudden price swings; manipulation would create artificial swings,
-            // trip false inversions, and make us sell + refuse to rebuy. With 4S, forecasts are exact and
-            // manipulation only ever moves them in our position's favor, so it is safe.
+            // Publish current positions for stock-manipulation consumers (puppet.js / darknet-worker.js).
+            // With 4S, forecasts are exact and manipulation only ever moves them in our position's favor, so it
+            // is always safe. Pre-4S we infer forecasts from price history and detect "inversions" on sudden
+            // swings; manipulation creates artificial swings that can trip false inversions and cause sell-offs.
+            // We therefore publish pre-4S ONLY when --pre4s-manip is set (e.g. BN8, where stocks are the sole
+            // income), and pair it with the manip-aware sell suppression below so consistent pumping is not
+            // mistaken for a reversal. When manip is off, behave as before and stay silent until 4S.
             if (stockServerMap) try {
-                if (pre4s) await clearStockPositions(ns); // No manipulation until 4S
+                if (pre4s && !pre4sManip) await clearStockPositions(ns); // No manipulation until 4S
                 else await writeStockPositions(ns, allStocks, stockServerMap);
             } catch { /* non-fatal */ }
             const corpus = holdings + playerStats.money; // Corpus means total stocks + cash
@@ -209,6 +213,11 @@ export async function main(ns) {
                     if (pre4s && stk.ticksHeld < pre4sMinHoldTime) {
                         if (!stk.warnedBadPurchase) log(ns, `WARNING: Thinking of selling ${stk.sym} with ER ${formatBP(stk.absReturn())}, but holding out as it was purchased just ${stk.ticksHeld} ticks ago...`);
                         stk.warnedBadPurchase = true; // Hack to ensure we don't spam this warning
+                    } else if (pre4s && pre4sManip && shouldHoldManipPosition(stk, pre4sBuyThresholdProbability)) {
+                        // We are actively pumping this position (grow longs / hack shorts via puppet/darknet). The
+                        // weak/ambiguous forecast that triggered the sell is the artificial noise of our own
+                        // manipulation, not a genuine reversal. Hold and keep pushing instead of bleeding the spread.
+                        stk.warnedBadPurchase = false;
                     } else {
                         sales += await doSellAll(ns, stk);
                         stk.warnedBadPurchase = false;
@@ -285,6 +294,25 @@ function getTimeInBitnode() { return Date.now() - resetInfo.lastNodeReset; }
 
 /* A sorting function to put stocks in the order we should prioritize investing in them */
 let purchaseOrder = (a, b) => (Math.ceil(a.timeToCoverTheSpread()) - Math.ceil(b.timeToCoverTheSpread())) || (b.absReturn() - a.absReturn());
+
+/** Pre-4S manipulation hold rule. When --pre4s-manip is on we (via puppet/darknet) actively push the price of
+ * every position we hold (grow longs, hack shorts). That manipulation creates artificial swings which the pre-4S
+ * inference can misread as a weakening forecast, triggering a spread-losing sell. This decides whether to hold
+ * (keep pumping and ride the noise) instead of selling. We only release a position on a genuine exit:
+ *   1. A trusted recent inversion has flipped the forecast clearly AGAINST our position (a real market-cycle flip
+ *      our pumping cannot reasonably overcome) -> sell.
+ *   2. The position is in profit AND the forecast has faded to roughly neutral -> lock in the gain.
+ * Otherwise hold. All inputs are in-memory fields already on the stock object, so this adds no RAM cost.
+ * @param {object} stk a stock object from initAllStocks (currently held)
+ * @param {number} margin probability distance from 0.5 considered a meaningful signal (pre-4s-buy-threshold-probability) */
+function shouldHoldManipPosition(stk, margin) {
+    const against = stk.sharesLong > 0 ? stk.prob < 0.5 - margin : stk.prob > 0.5 + margin;
+    const recentlyInverted = stk.lastInversion < minTickHistory; // a trusted inversion happened within the recent window
+    if (against && recentlyInverted) return false; // real reversal against us -> exit, our pump can't fight a true flip
+    const inProfit = stk.sharesLong > 0 ? stk.bid_price > stk.boughtPrice : stk.ask_price < stk.boughtPriceShort;
+    if (inProfit && Math.abs(stk.prob - 0.5) < margin) return false; // signal has faded while we're up -> take the gain
+    return true; // otherwise keep pumping and ignore the self-inflicted noise
+}
 
 /** @param {NS} ns
  * Generic helper for dodging the hefty RAM requirements of stock functions by spawning a temporary script to collect info for us. */

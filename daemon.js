@@ -487,7 +487,12 @@ export async function main(ns) {
                         return ["--liquidate"];
                 } catch { }
             }
-            return ["--fracH", options['stock-cash-frac'], "--fracB", options['stock-buy-frac']];
+            const stockArgs = ["--fracH", options['stock-cash-frac'], "--fracB", options['stock-buy-frac']];
+            // In BN8 hacking earns no money, so stocks are the sole income and manipulation consumers (puppet
+            // stockmanip / darknet --enable-stock) are already enabled. Tell stockmaster to publish positions and
+            // ride its own manipulation noise pre-4S, so we can bootstrap toward the (expensive) 4S Tix API.
+            if (bitNodeN == 8) stockArgs.push("--pre4s-manip");
+            return stockArgs;
         }
 
         function getAutopilotSleeveArgs() {
