@@ -808,7 +808,12 @@ async function manageAutomatedAugmentations(ns, resetInfo, ownedSourceFiles, sf1
     const bn8TrpReady = status.affordable_augs.includes(augTRP) || status.awaiting_install_augs.includes(augTRP);
     const bn8DaedalusReady = playerData.factions.includes("Daedalus") ||
         (status.installed_count >= bitNodeMults.DaedalusAugsRequirement && playerData.skills.hacking >= (2500 * 0.9));
-    const bn8RedPillMode = bn8FrequentInstall && !installedAugmentations.includes(augTRP) && (bn8DaedalusReady || bn8TrpReady);
+    // Once we already hold enough augmentations for the Daedalus requirement, stop the frequent-install churn
+    // regardless of hack level. Further resets only wipe the hacking climb we still need to reach 2500 for the
+    // Daedalus invite (and the TRP win). Without this, the hack-gated bn8DaedalusReady never trips because each
+    // frequent-install reset resets hacking below the gate, deadlocking the run just short of the win condition.
+    const bn8EnoughAugs = status.installed_count >= bitNodeMults.DaedalusAugsRequirement;
+    const bn8RedPillMode = bn8FrequentInstall && !installedAugmentations.includes(augTRP) && (bn8DaedalusReady || bn8TrpReady || bn8EnoughAugs);
     const soaPriorityMode = bitNode == 3 && options['purchase-mode'] == "soa-only" && !installedAugmentations.includes(soaWksHarmonizer);
     const cashRootPriorityEligible = bitNode == 3 && status.installed_count_ex_nf > 0;
     const cashRootReady = cashRootPriorityEligible && !installedAugmentations.includes(augCashRoot) &&
