@@ -62,10 +62,14 @@ export async function main(ns) {
         try {
             await openLocalCaches(ns);
             await freeLocalBlockedRam(ns);
+            // Stock promotion is the deliberate money engine in BN8, and it only runs while the session is fully
+            // idle (blockedRam === 0). Phishing blocks the same session RAM, so if it ran first it would starve
+            // stock every cycle. When --enable-stock is set, give stock first dibs on the freshly-freed session;
+            // phishing then fills whatever idle RAM is left.
+            if (options["enable-stock"]) await tryPromoteStocks(ns);
             if (!options["disable-phishing"]) await tryPhishing(ns);
             await crawlNeighbors(ns, script, String(options.origin), interval, maxAttempts, options["verbose-terminal"]);
-            // Idle-RAM darkweb actions (ported from SphyxOS darknet controller), all off by default.
-            if (options["enable-stock"]) await tryPromoteStocks(ns);
+            // Remaining idle-RAM darkweb actions (ported from SphyxOS darknet controller), all off by default.
             if (options["enable-share"]) await tryDarknetShare(ns);
             if (options["enable-induce"]) await tryInduceMigration(ns, String(options.origin));
         } catch (error) {
