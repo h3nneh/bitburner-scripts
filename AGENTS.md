@@ -4,7 +4,6 @@ Project-specific guidance for coding agents working in `bitburner-scripts`.
 
 ## Scope
 
-- Prefer minimal, targeted patches.
 - Preserve the existing script-oriented architecture and Bitburner conventions.
 - Do not rewrite working subsystems just to “clean them up”.
 
@@ -12,15 +11,13 @@ Project-specific guidance for coding agents working in `bitburner-scripts`.
 
 - Keep responses concise and direct.
 - Do not make assumptions. Verify behavior, state, and root cause from code or runtime evidence before changing anything.
-- Use `apply_patch` for file edits.
-- Favor pragmatic fixes over theoretical refactors.
 - Do real runtime verification, not just static checks.
 - Add useful dev-console logs when debugging UI automation.
 - Short infiltration status logs may go to the browser dev console only when it is open; keep detailed infiltration diagnostics behind explicit debug flags.
 - Keep `infiltrate.js` debug logging optional and disabled by default.
 - Do not disable `logError` in infiltration automation; error logging stays on.
-- When a runtime incident reveals a durable project rule or user preference, update `AGENTS.md` in the same change unless the user says not to.
-- Keep these notes current: remove or amend stale guidance when behavior changes, rather than accumulating contradictory rules.
+- When a runtime incident reveals a durable rule, generalize it into an existing rule rather than appending a new bullet; add a new bullet only when no existing principle covers it.
+- Keep these notes current: amend or delete stale guidance when behavior changes, and fold narrow special cases back into the principle they came from.
 
 ## Infiltration Rules
 
@@ -152,7 +149,7 @@ Project-specific guidance for coding agents working in `bitburner-scripts`.
 - `autopilot.js` should not idle for an arbitrary one-minute income baseline before deciding whether casino is needed. Make the casino/run-workers decision immediately from current cash, casino history, net worth, and concrete launch constraints.
 - `casino.js` must `ns.spawn(...)` the selected casino game script, not `ns.run(...)` it. On 8GB home, `casino.js` plus `casino-roulette.js` can exceed RAM, especially because roulette uses `spawn` for its own completion handoff.
 - `casino.js` should not be responsible for cleaning up RAM before roulette. `autopilot.js` should avoid launching scripts before the first casino run except the single direct `Joe's Guns` `infiltration-runner.js` cash session, then stop conflicting scripts immediately before launching casino.
-- For the first casino run on low-RAM fresh resets, `autopilot.js` should spawn the lightweight `casino.js --game roulette` dispatcher instead of `casino-roulette.js` directly. Live DEV 3.0.0 testing showed direct delayed `ns.spawn` of `casino-roulette.js` can leave no process running even with free RAM, while the dispatcher can launch roulette after autopilot exits.
+- For the first casino run on low-RAM fresh resets, `autopilot.js` should spawn the lightweight `casino.js --game roulette` dispatcher instead of `casino-roulette.js` directly; a directly spawned roulette can fail to start even with free RAM, while the dispatcher launches it after autopilot exits.
 - `casino-roulette.js` must use `ns.spawn(...)` for `--on-completion-script` handoff. On 8GB home, `ns.run(...)` cannot restart `autopilot.js` while roulette still occupies RAM after being kicked out.
 - `casino-roulette.js --kill-all-scripts` must not use temp-helper scripts on 8GB home. Directly use `ns.ps`, `ns.kill`, `ns.scan`, and `ns.killall`; skip remote file cleanup if necessary rather than crashing before roulette starts.
 - After roulette, faction invitation modals such as the Aevum invite can remain over the UI. Dismiss `Decide later` before the casino completion handoff and on `autopilot.js` startup so post-casino automation is not hidden behind a modal.
@@ -204,17 +201,16 @@ Project-specific guidance for coding agents working in `bitburner-scripts`.
 
 ## Live Testing Workflow
 
-- When the user asks to verify behavior, prefer live runtime validation against `../bitburner-src` over theory.
+Live runtime validation needs a Bitburner source checkout (`bitburner-src`, run with
+`npm run start:dev`) and a Playwright/Chromium setup. Neither is present in this workspace by
+default; if they are set up, the rules below apply — otherwise verify with `node --check` and
+static reasoning and say so in the response.
+
 - Use headless Chromium / Playwright for UI/runtime verification when possible.
-- Start the game dev server from `../bitburner-src` with `npm run start:dev`.
-- Start the sync bridge from this repo with `node local-sync-server.js --source-root /Volumes/SRC/bitburner-scripts --port 12526`.
-- Never kill or reuse an existing `ws://127.0.0.1:12525` Remote API bridge. Treat it as user-owned; start a separate sync bridge on another port such as `12526` for Codex validation.
+- Start the sync bridge from this repo with `node local-sync-server.js --source-root <absolute path of this repo> --port 12526`.
+- Never kill or reuse an existing `ws://127.0.0.1:12525` Remote API bridge. Treat it as user-owned; start a separate sync bridge on another port such as `12526` for agent validation.
 - Bitburner's Remote API is file-only. `local-sync-server.js` must not pretend it can run scripts through the Remote API WebSocket. Script-free execution is only available through a separate Chrome DevTools Protocol endpoint, for example `--devtools-port ... --terminal-command ...`.
 - A running `local-sync-server.js` process does not pick up code changes. If behavior on port `12525` must change, the user-owned process has to be restarted intentionally.
-- Reuse the headless helpers in `/tmp/pwbb` if they already exist:
-  - `run_bb_command.mjs`
-  - `run_bb_multi.mjs`
-  - `run_bb_suite.mjs`
 - Run Bitburner headless validations strictly one at a time against a single Remote API port.
 - Do not parallelize headless game sessions against the same Remote API connection.
 - A websocket `409` from the Remote API is usually a test harness conflict, not a script bug.
@@ -237,8 +233,7 @@ Project-specific guidance for coding agents working in `bitburner-scripts`.
 ## Validation
 
 - After changing JS files, run `node --check` on each edited script.
-- Do not close runtime-affecting changes on theory alone. Verify them in live headless Bitburner runtime before the final response.
-- For orchestration/runtime changes, always include a separate final live check on a fresh 8GB home save, even if the main regression uses a later-game save.
+- Runtime-affecting changes are not proven by static checks. When live headless Bitburner is available, verify the touched path there — including one run on a fresh 8GB home save for orchestration changes. When it is not available, state in the response which behavior remains unverified.
 - If a behavior depends on runtime UI state, say so explicitly in the final response.
 - Keep verifier-only debug enablement isolated to the verifier path; do not globally enable infiltration debug logs for live gameplay.
 - Infiltration dev-console diagnostics must stay opt-in: use `work-for-factions.js --infiltration-debug`, `infiltration-runner.js --debug`, or `infiltrate.js --debug`; normal automation should launch `infiltrate.js --quiet` without console status spam.
@@ -260,10 +255,7 @@ Project-specific guidance for coding agents working in `bitburner-scripts`.
 - `hack.js`: dedicated hacking/prep/targeting entrypoint. It should run the hacking process by default and must not launch helper/periodic automation.
 - Rooting servers and port-cracker state such as `updatePortCrackers` belong in `hack.js`, not `daemon.js`.
 - `daemon.js` should forward only hacking-relevant flags to `hack.js`. Do not keep daemon orchestration flags in `hack.js` merely to tolerate raw `ns.args` passthrough.
-- Do not keep stock-manipulation mode in `hack.js`. If stock orchestration is reintroduced, keep it outside the dedicated hacking runner and pass only explicit low-level scheduling inputs.
-- Do not keep `use-hacknet-nodes` / `use-hacknet-servers` mode in `hack.js`. The dedicated hacking runner should avoid consuming hacknet server RAM by default.
-- Do not keep `share` / `no-share` / share-fill scheduling in `hack.js`. The dedicated hacking runner should not launch faction-reputation sharing work.
+- `hack.js` stays a pure hacking runner: no stock manipulation, no hacknet node/server modes, no share/share-fill scheduling. If any of these return, they belong in `daemon.js`, which passes `hack.js` only explicit low-level scheduling inputs.
 
 ## Original source code of the game
-- `../bitburner-src`: all sources to build/test the scripts and game itself
-- `nix develop`: to run and test the game
+- The game sources (`bitburner-src`) are not part of this workspace. When a checkout is available next to this repo, it is the reference for building and testing the game itself.

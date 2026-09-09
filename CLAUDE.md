@@ -51,7 +51,9 @@ Config file overrides: create `script-name.js.config.txt` with a JSON dict to ch
 
 ```
 autopilot.js          ← top-level orchestrator; manages the full game loop
-  └─ daemon.js        ← hacking engine; schedules batch HWGW cycles, spawns helpers
+  └─ daemon.js        ← orchestration launcher/helper scheduler; owns all non-hacking launches
+       ├─ puppet.js   ← default batcher (Sphyxis Puppet2 saturation batcher)
+       ├─ hack.js     ← legacy hacking/prep/targeting engine (--disable-puppet)
        └─ Remote/     ← long-lived worker scripts deployed to remote servers
             hack-target.js
             grow-target.js
@@ -80,7 +82,7 @@ autopilot.js          ← top-level orchestrator; manages the full game loop
 **Top-level convenience scripts** (run from the in-game terminal):
 `autopilot.js`, `daemon.js`, `stockmaster.js`, `faction-manager.js`, `ascend.js`, `gangs.js`, `sleeve.js`, `bladeburner.js`, `casino.js`, `crime.js`, `work-for-factions.js`, `hacknet-upgrade-manager.js`, `host-manager.js`, `scan.js`, `stats.js`, `reserve.js`, `cleanup.js`
 
-**`darknet.ts`** — TypeScript script using the experimental `ns.dnet` API (darkweb puzzle-cracking); loaded by the game's built-in TS transpiler.
+**Darknet** — `darknet.js`, `darknet-proxy.js`, `darknet-worker.js` and `Tasks/darknet-manager.js` implement Bitburner 3.0 darkweb puzzle-cracking via the `ns.dnet` API; `Tasks/darknet-manager.js` owns orchestration.
 
 ## Key conventions
 
