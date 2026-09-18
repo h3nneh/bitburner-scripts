@@ -2,6 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+The behavioural rules for the automation scripts live in `AGENTS.md` and are imported here —
+Claude Code does not read `AGENTS.md` on its own while a `CLAUDE.md` exists.
+
+@AGENTS.md
+
 ## Context
 
 These are scripts for the browser game **Bitburner**. They run *inside the game*, not via Node.js or any standard runtime. There is no build system, no package manager, and no test suite. The game executes `.js` (and `.ts`) files directly in its NetscriptJS sandbox.

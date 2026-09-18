@@ -60,21 +60,14 @@ Project-specific guidance for coding agents working in `bitburner-scripts`.
 - `autopilot.js` must discover long-running child automation across all servers, not just `home`; launchers like `run-corporation.js` may start `corporation.js` remotely and then exit.
 - `autopilot.js` should throttle relaunches of short-lived dispatcher scripts such as `run-corporation.js` and `work-for-factions.js`; if they exit quickly because there is nothing actionable, do not spam relaunches every script-check interval.
 - When `autopilot.js` hands off to `daemon.js`, pass capability/progression intent and let `daemon.js` decide RAM-gated background launches.
-- `autopilot.js` startup must not depend on temp-helper scripts for cheap core reads such as `ns.getResetInfo()` or `ns.getServerMaxRam("home")`; after casino/roulette there may be less than the temp-helper RAM burst free.
+- `autopilot.js` runs on a low `ramOverride` and must survive an 8GB home right after roulette, when a temp-helper burst does not fit. Cheap reads (`getResetInfo`, `getServerMaxRam`, `getPlayer`, `getMoneySources`, `ps`, `scan`, `getServerRequiredHackingLevel`, `hasRootAccess`) are direct `ns.*` calls, never temp helpers; refreshes that need a helper (stock value, owned augmentations) degrade to cached/zero instead of retrying. Expensive Singularity purchase APIs (`purchaseTor`, `purchaseProgram`, `getUpgradeHomeRamCost`, `upgradeHomeRam`) go through a guarded helper or spawn handoff so dynamic RAM does not kill autopilot.
 - `autopilot.js` Singularity availability detection must be isolated from optional temp-helper refreshes. A failed owned-augmentation helper should leave augmentation data unknown/cached, not set `singularityAvailable=false`.
-- `autopilot.js` runs with a low `ramOverride`; do not call expensive Singularity purchase APIs such as `purchaseTor`, `purchaseProgram`, `getUpgradeHomeRamCost`, or `upgradeHomeRam` directly from it. Use a guarded temp-helper or spawn handoff so dynamic RAM does not kill autopilot.
 - Version temp-helper output filenames when changing inline helper commands in `autopilot.js`, especially early bootstrap purchase helpers, to avoid noisy immutable-temp-script overwrite warnings in the terminal.
 - Before reporting a TOR purchase, check `ns.hasTorRouter()` rather than relying on `ns.singularity.purchaseTor()` returning `true`; `purchaseTor()` may return success even when TOR was already owned.
 - If early permanent home-RAM bootstrap only partially reaches the target, `autopilot.js` should keep workers stopped only when the next RAM upgrade is immediately affordable. If cash is short, launch workers and keep stock trading active; do not use `reserve.txt` as a long-running cash accumulator for RAM upgrades.
 - When `autopilot.js` uses direct Netscript calls to avoid temp-helper RAM bursts, disable `disableLog` first, then disable standard logs for noisy calls such as `scan`, `getServerMaxRam`, and `getServerUsedRam`; keep useful explicit `INFO`/`WARNING` logs visible.
-- `autopilot.js` instance counting must use direct `ns.ps("home")`, not helper `instanceCount()`, because `instanceCount()` uses a temp-helper and can fail immediately after roulette when RAM is still tight.
-- `autopilot.js` should read `ns.getPlayer()` directly in the main loop. The direct RAM cost is lower and more reliable than a temp-helper burst on 8GB home after roulette.
-- `autopilot.js` running-script discovery must use direct `ns.ps(server)` over the scanned server list. A temp-helper burst for all `ps` results can fail repeatedly after roulette on 8GB home and leave post-casino automation idle.
 - When `singularityAvailable=true`, `autopilot.js` should buy critical permanent bootstrap items directly after casino and before launching workers: home RAM to at least 1TB, TOR, and available port crackers. Gate this on actual Singularity availability, not inferred Source-File metadata, and do it before `stockmaster.js`, `sleeve.js`, `daemon.js`, `work-for-factions.js`, or `host-manager.js` can consume the RAM/cash needed by the bootstrap helper.
-- `autopilot.js` world-daemon availability checks should use direct `ns.scan`, `ns.getServerRequiredHackingLevel`, and `ns.hasRootAccess`; do not route these cheap checks through temp helpers on low-RAM starts.
-- `autopilot.js` should read `ns.getMoneySources()` directly for casino completion checks; using a temp helper can fail immediately after roulette on 8GB home.
 - `autopilot.js` should not call `ns.spawn(...)` directly after it has launched or killed worker scripts, because its low `ramOverride` can be exceeded by cumulative dynamic RAM. `spawn-handoff.js` needs 3.6GB in Bitburner DEV 3.0, so on fresh 8GB starts `autopilot.js` must launch it from an early low-RAM path before startup refreshes or worker orchestration.
-- On 8GB home, `autopilot.js` should skip stock-value helper refreshes and treat cached stock value as zero rather than retrying `/Temp/stock-symbols.txt.js` under low free RAM.
 - Keep `daemon.js` normal-mode logs concise. Full target ordering, toolkit/multiplier phase markers, and repeated helper launch notices belong behind `--verbose`; the per-loop summary and warnings should remain visible.
 - `daemon.js` must not open tail windows by default. Tail windows are opt-in with `--tail-windows`; when not enabled, daemon-managed child scripts that support it should receive `--no-tail-windows`.
 - Before the first casino run in a reset, if cash is below the casino travel/seed threshold, `autopilot.js` may launch exactly one direct `infiltration-runner.js` session at `Joe's Guns` for cash. Do not use `daemon.js`, `work-for-factions.js`, grafting, stockmaster, or any other fallback before casino.
@@ -192,9 +185,9 @@ Project-specific guidance for coding agents working in `bitburner-scripts`.
 
 ## Bitburner 3.0.0 Notes
 
-- `ns.format.time(...)` should be used instead of legacy `ns.ui.time(...)`.
-- Stock API naming changed: prefer `has4SDataTixApi()` instead of `has4SDataTIXAPI()`.
-- `ns.singularity.gymWorkout(...)` now expects `GymType` enum values: `str`, `def`, `dex`, `agi`, not `"Strength"`, `"Defense"`, `"Dexterity"`, `"Agility"`.
+- Time formatting: `ns.format.time(...)`; `ns.ui.time(...)` is the v2 name that `checkBackwardsCompatibility` rewrites.
+- 4S data check: `has4SDataTixApi()`.
+- `ns.singularity.gymWorkout(...)` takes `GymType` values `str`, `def`, `dex`, `agi`.
 - Some scripts that build temp helper scripts via `getNsDataThroughFile(...)` can hit much higher RAM costs in DEV 3.0.0 than expected on a fresh save.
 - `autopilot.js` owned-augmentation refresh may use a temp helper after `singularityAvailable` is confirmed, but helper failure must not disable Singularity-dependent automation. Gate Singularity on actual cheap call availability, not Source-File metadata.
 - Known helper bursts should be represented in `daemon.js` launch policy rather than duplicated in leaf scripts.
