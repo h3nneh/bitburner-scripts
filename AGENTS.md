@@ -242,8 +242,8 @@ static reasoning and say so in the response.
 - `infiltration-runner.js`: one-shot infiltration executor with explicit args
 - `faction-manager.js`: augmentation affordability/purchase/status output
 - `autopilot.js`: top-level orchestration and install decisions
-- `daemon.js`: orchestration launcher/helper scheduler. All non-hacking script launches stay here, and it must launch `hack.js` as a separate Netscript process, not import it or duplicate the hacking scheduler.
-- `hack.js`: dedicated hacking/prep/targeting entrypoint. It should run the hacking process by default and must not launch helper/periodic automation.
+- `daemon.js`: orchestration launcher/helper scheduler. All non-hacking script launches stay here, and it must launch the batcher (`puppet.js` by default, `hack.js` with `--disable-puppet`) as a separate Netscript process, not import it or duplicate the hacking scheduler.
+- `hack.js`: legacy hacking/prep/targeting engine, used only with `daemon.js --disable-puppet`. It must not launch helper/periodic automation.
 - Rooting servers and port-cracker state such as `updatePortCrackers` belong in `hack.js`, not `daemon.js`.
 - `daemon.js` should forward only hacking-relevant flags to `hack.js`. Do not keep daemon orchestration flags in `hack.js` merely to tolerate raw `ns.args` passthrough.
 - `hack.js` stays a pure hacking runner: no stock manipulation, no hacknet node/server modes, no share/share-fill scheduling. If any of these return, they belong in `daemon.js`, which passes `hack.js` only explicit low-level scheduling inputs.
