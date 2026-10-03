@@ -54,38 +54,7 @@ Config file overrides: create `script-name.js.config.txt` with a JSON dict to ch
 
 ## Architecture
 
-```
-autopilot.js          ← top-level orchestrator; manages the full game loop
-  └─ daemon.js        ← orchestration launcher/helper scheduler; owns all non-hacking launches
-       ├─ puppet.js   ← default batcher (Sphyxis Puppet2 saturation batcher)
-       ├─ hack.js     ← legacy hacking/prep/targeting engine (--disable-puppet)
-       └─ Remote/     ← long-lived worker scripts deployed to remote servers
-            hack-target.js
-            grow-target.js
-            weak-target.js
-            share.js
-```
-
-**`helpers.js`** is the shared utility library imported by almost every other script. Key exports:
-- `formatMoney`, `formatRam`, `formatDuration`, `formatNumber` — display formatting
-- `getNsDataThroughFile` / `getNsDataThroughFile_Custom` — RAM-safe NS API calls via temp files
-- `runCommand` / `runCommand_Custom` — execute arbitrary NS code in a temp script
-- `getConfiguration` — unified arg parsing with config-file overrides and --help rendering
-- `getActiveSourceFiles` — detect which Source Files the player owns
-- `tryGetBitNodeMultipliers` — get current BN multipliers (falls back to hard-coded table)
-- `scanAllServers` — BFS over the entire server graph
-- `log`, `tail`, `autoRetry`, `instanceCount`, `getErrorInfo` — runtime utilities
-- `jsonReplacer` / `jsonReviver` — serialize `Map`, `Set`, `Infinity`, `NaN`, `BigInt` through JSON
-
-**`Tasks/`** — utility scripts run on demand or spawned by `daemon.js`:
-- `crack-host.js` — opens ports and nukes a server
-- `backdoor-all-servers.js` — installs backdoors everywhere
-- `contractor.js` — solves coding contracts
-- `ram-manager.js` — buys/upgrades home RAM
-- `program-manager.js` / `tor-manager.js` — purchases programs
-
-**Top-level convenience scripts** (run from the in-game terminal):
-`autopilot.js`, `daemon.js`, `stockmaster.js`, `faction-manager.js`, `ascend.js`, `gangs.js`, `sleeve.js`, `bladeburner.js`, `casino.js`, `crime.js`, `work-for-factions.js`, `hacknet-upgrade-manager.js`, `host-manager.js`, `scan.js`, `stats.js`, `reserve.js`, `cleanup.js`
+`autopilot.js` orchestrates the game loop and launches `daemon.js`, which owns all non-hacking launches and starts `puppet.js` (default batcher) or `hack.js` (legacy engine, `--disable-puppet`).
 
 **Darknet** — `darknet.js`, `darknet-proxy.js`, `darknet-worker.js` and `Tasks/darknet-manager.js` implement Bitburner 3.0 darkweb puzzle-cracking via the `ns.dnet` API; `Tasks/darknet-manager.js` owns orchestration.
 
